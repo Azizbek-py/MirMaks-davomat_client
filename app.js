@@ -1,372 +1,153 @@
-console.log('App.js loaded');
+// Submit
+submitButton.addEventListener(
+  'click',
+  async () => {
 
-// DOM Elements
-const typeButtons = document.querySelectorAll('.tab');
-const captureButton = document.getElementById('capture');
-const submitButton = document.getElementById('submit');
-const retakeButton = document.getElementById('retake');
-const clockLabel = document.getElementById('clock');
-const locationStatus = document.getElementById('location-status');
-const message = document.getElementById('message');
-const video = document.getElementById('camera');
-const capturedImage = document.getElementById('captured-image');
+    if (!selfieData) {
 
-console.log('Elements found:', {
-  typeButtons: typeButtons.length,
-  captureButton,
-  submitButton,
-  retakeButton,
-  clockLabel,
-  locationStatus,
-  message,
-  video
-});
+      setMessage(
+        'Avval rasm oling',
+        true
+      );
 
-// State
-let selectedType = 'KIRISH';
-let latitude = 0;
-let longitude = 0;
-let accuracy = 0;
-let selfieData = '';
-let captureTime = 0;
-let stream = null;
+      return;
+    }
 
-// API URL
-const isLocalhost =
-  window.location.hostname === 'localhost' ||
-  window.location.hostname === '127.0.0.1' ||
-  window.location.protocol === 'file:';
+    if (latitude === 0 || longitude === 0) {
 
-const API_BASE_URL = isLocalhost
-  ? 'http://127.0.0.1:8000'
-  : (
-      'https://mirmaks-davomat-server.onrender.com'
-    );
+      setMessage(
+        'Joylashuv aniqlanmadi',
+        true
+      );
 
-console.log('API_BASE_URL:', API_BASE_URL);
+      return;
+    }
 
-// Start Camera
-async function startCamera() {
-  try {
-    console.log('Starting camera...');
+    let initData =
+      window.Telegram?.WebApp?.initData;
 
-    const constraints = {
-      video: {
-        facingMode: 'user',
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
-      },
-      audio: false
-    };
+    if (!initData) {
 
-    stream = await navigator.mediaDevices.getUserMedia(constraints);
+      initData =
+        'query_id=test&user=test&auth_date=123456&hash=testhash';
+    }
 
-    video.srcObject = stream;
+    submitButton.disabled = true;
 
-    console.log('Camera started successfully');
+    setMessage('Yuborilmoqda...');
 
-    setMessage('Kamera tayyor');
-  } catch (err) {
-    console.error('Camera error:', err);
+    try {
 
-    setMessage(
-      'Kamera ruxsati berilmadi: ' + err.message,
-      true
-    );
-  }
-}
+      const payload = {
 
-// Set Message
-function setMessage(text, isError = false) {
-  message.textContent = text;
-  message.style.color = isError ? '#ff6b6b' : '#00d98e';
-}
+        telegram_id:
+          window.Telegram?.WebApp
+            ?.initDataUnsafe?.user?.id ||
+          123456789,
 
-// Update Clock
-function updateClock() {
-  const now = new Date();
+        type: selectedType,
 
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  const seconds = String(now.getSeconds()).padStart(2, '0');
-
-  clockLabel.textContent = ${hours}:${minutes}:${seconds};
-}
-
-// Get Location
-function getLocation() {
-  if (!navigator.geolocation) {
-    setMessage('Geolocation qo‘llab-quvvatlanmadi', true);
-    return;
-  }
-
-  navigator.geolocation.watchPosition(
-    (position) => {
-      latitude = position.coords.latitude;
-      longitude = position.coords.longitude;
-      accuracy = position.coords.accuracy;
-
-      locationStatus.textContent =
-        ${latitude.toFixed(4)}, ${longitude.toFixed(4)};
-
-      console.log('Location updated:', {
         latitude,
         longitude,
-        accuracy
-      });
-    },
-    (err) => {
-      console.error('Location error:', err);
+        accuracy,
 
-      locationStatus.textContent =
-        'Xatolik: ' + err.message;
-    },
-    {
-      enableHighAccuracy: true,
-      timeout: 5000,
-      maximumAge: 0
-    }
-  );
-}
+        selfie_data: selfieData,
 
-// Tab Buttons
-typeButtons.forEach(btn => {
-  btn.addEventListener('click', () => {
-    typeButtons.forEach(b =>
-      b.classList.remove('active')
-    );
+        init_data: initData,
 
-    btn.classList.add('active');
+        device_info: navigator.userAgent,
 
-    selectedType = btn.dataset.type;
+        platform: navigator.platform,
 
-    console.log('Type selected:', selectedType);
-  });
-});
+        capture_time: captureTime,
+      };
 
-// Capture Button
-captureButton.addEventListener('click', () => {
-  console.log('Capture clicked');
+      const response = await fetch(
+        ${API_BASE_URL}/api/attendance,
+        {
+          method: 'POST',
 
-  if (!video.videoWidth) {
-    setMessage('Kamera hali tayyor emas', true);
-    return;
-  }
+          headers: {
+            'Content-Type': 'application/json'
+          },
 
-  const canvas = document.createElement('canvas');
-
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-
-  const ctx = canvas.getContext('2d');
-
-  ctx.drawImage(
-    video,
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  );
-
-  selfieData = canvas.toDataURL(
-    'image/jpeg',
-    0.85
-  );
-
-  captureTime = Math.floor(Date.now() / 1000);
-
-  console.log(
-    'Captured image, size:',
-    selfieData.length
-  );
-
-  // Stop camera
-  if (stream) {
-    stream.getTracks().forEach(track =>
-      track.stop()
-                               );
-  }
-
-  // Hide video, show image
-  video.style.display = 'none';
-
-  capturedImage.src = selfieData;
-
-  capturedImage.style.display = 'block';
-
-  // Buttons
-  captureButton.style.display = 'none';
-
-  retakeButton.style.display = 'inline-block';
-
-  setMessage('Rasm olindi ✓');
-});
-
-// Retake Button
-retakeButton.addEventListener('click', async () => {
-  console.log('Retake clicked');
-
-  capturedImage.style.display = 'none';
-
-  video.style.display = 'block';
-
-  await startCamera();
-
-  selfieData = '';
-
-  captureTime = 0;
-
-  retakeButton.style.display = 'none';
-
-  captureButton.style.display = 'inline-block';
-
-  setMessage('');
-});
-
-// Submit Button
-submitButton.addEventListener('click', async () => {
-  console.log('Submit clicked');
-
-  if (!selfieData) {
-    return setMessage(
-      'Avval rasm oling',
-      true
-    );
-  }
-
-  if (latitude === 0 || longitude === 0) {
-    return setMessage(
-      'Joylashuv aniqlanmadi',
-      true
-    );
-  }
-
-  // Telegram initData
-  let initData =
-    window.Telegram?.WebApp?.initData;
-
-  // Local testing mock
-  if (!initData) {
-    initData =
-      'query_id=mock&user=test&auth_date=123456&hash=abcdef';
-
-    console.log(
-      'Using mock initData for local testing'
-    );
-  }
-
-  console.log(
-    'InitData present:',
-    !!initData
-  );
-
-  submitButton.disabled = true;
-
-  setMessage('Yuborilmoqda...');
-
-  try {
-    const payload = {
-      telegram_id:
-        window.Telegram?.WebApp
-          ?.initDataUnsafe?.user?.id ||
-        123456789,
-
-      type: selectedType,
-
-      latitude,
-      longitude,
-      accuracy,
-
-      selfie_data: selfieData,
-
-      init_data: initData,
-
-      device_info: navigator.userAgent,
-
-      platform: navigator.platform,
-
-      capture_time: captureTime,
-    };
-
-    console.log('Sending payload:', {
-      ...payload,
-      selfie_data: '...'
-    });
-
-    const response = await fetch(
-      ${API_BASE_URL}/api/attendance,
-      {
-        method: 'POST',
-
-        headers: {
-          'Content-Type': 'application/json'
-        },
-
-        body: JSON.stringify(payload),
-      }
-    );
-
-    const result = await response.json();
-
-    console.log('Response:', result);
-
-    if (!response.ok) {
-      throw new Error(
-        result.detail ||
-        'Xatolik yuz berdi'
+          body: JSON.stringify(payload),
+        }
       );
+
+      const result =
+        await response.json();
+
+      if (!response.ok) {
+
+        throw new Error(
+          result.detail ||
+          'Server xatosi'
+        );
+      }
+
+      setMessage(
+        'Davomat qabul qilindi ✓'
+      );
+
+      setTimeout(async () => {
+
+        selfieData = '';
+
+        capturedImage.style.display =
+          'none';
+
+        video.style.display = 'block';
+
+        retakeButton.style.display =
+          'none';
+
+        captureButton.style.display =
+          'inline-block';
+
+        await startCamera();
+
+        setMessage('');
+
+      }, 2000);
+
+    } catch (err) {
+
+      console.error(err);
+
+      setMessage(
+        err.message,
+        true
+      );
+
+    } finally {
+
+      submitButton.disabled = false;
     }
-
-    setMessage(
-      'Davomat qabul qilindi ✓'
-    );
-
-    setTimeout(async () => {
-      selfieData = '';
-
-      retakeButton.style.display = 'none';
-
-      captureButton.style.display =
-        'inline-block';
-
-      setMessage('');
-
-      capturedImage.style.display = 'none';
-
-      video.style.display = 'block';
-
-      await startCamera();
-    }, 2000);
-
-  } catch (err) {
-    console.error('Submit error:', err);
-
-    setMessage(err.message, true);
-
-  } finally {
-    submitButton.disabled = false;
   }
-});
+);
 
-// Initialize
+// Init
 function init() {
-  console.log('Initializing app...');
-
-  startCamera();
-
-  getLocation();
 
   updateClock();
 
   setInterval(updateClock, 1000);
+
+  getLocation();
+
+  startCamera();
 }
 
-// Start App
+// Start
 if (document.readyState === 'loading') {
+
   document.addEventListener(
     'DOMContentLoaded',
     init
   );
+
 } else {
+
   init();
 }
