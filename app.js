@@ -31,17 +31,26 @@ let selfieData = '';
 let captureTime = 0;
 let stream = null;
 
-// API URL - use environment variable for production, fallback for local
-const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:';
+// API URL
+const isLocalhost =
+  window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1' ||
+  window.location.protocol === 'file:';
+
 const API_BASE_URL = isLocalhost
   ? 'http://127.0.0.1:8000'
-  : (process.env.API_URL || 'https://your-api-domain.herokuapp.com');
+  : (
+      import.meta.env.VITE_API_URL ||
+      'https://your-render-url.onrender.com'
+    );
+
 console.log('API_BASE_URL:', API_BASE_URL);
 
 // Start Camera
 async function startCamera() {
   try {
     console.log('Starting camera...');
+
     const constraints = {
       video: {
         facingMode: 'user',
@@ -50,13 +59,21 @@ async function startCamera() {
       },
       audio: false
     };
+
     stream = await navigator.mediaDevices.getUserMedia(constraints);
+
     video.srcObject = stream;
+
     console.log('Camera started successfully');
+
     setMessage('Kamera tayyor');
   } catch (err) {
     console.error('Camera error:', err);
-    setMessage('Kamera ruxsati berilmadi: ' + err.message, true);
+
+    setMessage(
+      'Kamera ruxsati berilmadi: ' + err.message,
+      true
+    );
   }
 }
 
@@ -69,16 +86,18 @@ function setMessage(text, isError = false) {
 // Update Clock
 function updateClock() {
   const now = new Date();
+
   const hours = String(now.getHours()).padStart(2, '0');
   const minutes = String(now.getMinutes()).padStart(2, '0');
   const seconds = String(now.getSeconds()).padStart(2, '0');
-  clockLabel.textContent = `${hours}:${minutes}:${seconds}`;
+
+  clockLabel.textContent = ${hours}:${minutes}:${seconds};
 }
 
 // Get Location
 function getLocation() {
   if (!navigator.geolocation) {
-    setMessage('Geolocation qo\'llab-quvvatlanmadi', true);
+    setMessage('Geolocation qo‘llab-quvvatlanmadi', true);
     return;
   }
 
@@ -87,23 +106,41 @@ function getLocation() {
       latitude = position.coords.latitude;
       longitude = position.coords.longitude;
       accuracy = position.coords.accuracy;
-      locationStatus.textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
-      console.log('Location updated:', { latitude, longitude, accuracy });
+
+      locationStatus.textContent =
+        ${latitude.toFixed(4)}, ${longitude.toFixed(4)};
+
+      console.log('Location updated:', {
+        latitude,
+        longitude,
+        accuracy
+      });
     },
     (err) => {
       console.error('Location error:', err);
-      locationStatus.textContent = 'Xatolik: ' + err.message;
+
+      locationStatus.textContent =
+        'Xatolik: ' + err.message;
     },
-    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+    {
+      enableHighAccuracy: true,
+      timeout: 5000,
+      maximumAge: 0
+    }
   );
 }
 
 // Tab Buttons
 typeButtons.forEach(btn => {
   btn.addEventListener('click', () => {
-    typeButtons.forEach(b => b.classList.remove('active'));
+    typeButtons.forEach(b =>
+      b.classList.remove('active')
+    );
+
     btn.classList.add('active');
+
     selectedType = btn.dataset.type;
+
     console.log('Type selected:', selectedType);
   });
 });
@@ -111,32 +148,56 @@ typeButtons.forEach(btn => {
 // Capture Button
 captureButton.addEventListener('click', () => {
   console.log('Capture clicked');
+
   if (!video.videoWidth) {
     setMessage('Kamera hali tayyor emas', true);
     return;
   }
 
   const canvas = document.createElement('canvas');
+
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
+
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  selfieData = canvas.toDataURL('image/jpeg', 0.85);
+
+  ctx.drawImage(
+    video,
+    0,
+    0,
+    canvas.width,
+    canvas.height
+  );
+
+  selfieData = canvas.toDataURL(
+    'image/jpeg',
+    0.85
+  );
+
   captureTime = Math.floor(Date.now() / 1000);
-  console.log('Captured image, size:', selfieData.length);
+
+  console.log(
+    'Captured image, size:',
+    selfieData.length
+  );
 
   // Stop camera
   if (stream) {
-    stream.getTracks().forEach(track => track.stop());
+    stream.getTracks().forEach(track =>
+      track.stop()
+                               );
   }
 
-  // Hide video, show captured image
+  // Hide video, show image
   video.style.display = 'none';
+
   capturedImage.src = selfieData;
+
   capturedImage.style.display = 'block';
 
-  // Hide capture, show retake
+  // Buttons
   captureButton.style.display = 'none';
+
   retakeButton.style.display = 'inline-block';
 
   setMessage('Rasm olindi ✓');
@@ -146,18 +207,18 @@ captureButton.addEventListener('click', () => {
 retakeButton.addEventListener('click', async () => {
   console.log('Retake clicked');
 
-  // Hide captured image, show video
   capturedImage.style.display = 'none';
+
   video.style.display = 'block';
 
   await startCamera();
 
-  // Reset state
   selfieData = '';
+
   captureTime = 0;
 
-  // Hide retake, show capture
   retakeButton.style.display = 'none';
+
   captureButton.style.display = 'inline-block';
 
   setMessage('');
@@ -168,70 +229,121 @@ submitButton.addEventListener('click', async () => {
   console.log('Submit clicked');
 
   if (!selfieData) {
-    return setMessage('Avval rasm oling', true);
+    return setMessage(
+      'Avval rasm oling',
+      true
+    );
   }
+
   if (latitude === 0 || longitude === 0) {
-    return setMessage('Joylashuv aniqlanmadi', true);
+    return setMessage(
+      'Joylashuv aniqlanmadi',
+      true
+    );
   }
 
-  // Get initData - use real from Telegram WebApp or mock for local testing
-  let initData = window.Telegram?.WebApp?.initData;
-  if (!initData) {
-    // Mock initData for local testing
-    const mockInitData = 'query_id=AAHdF6IQAAAAAAB3XRehFgEsFA&user=%7B%22id%22%3A123456789%2C%22first_name%22%3A%22Test%22%2C%22last_name%22%3A%22User%22%2C%22language_code%22%3A%22uz%22%7D&auth_date=1715500000&hash=abcdef1234567890';
-    initData = mockInitData;
-    console.log('Using mock initData for local testing');
-  }
-  console.log('InitData present:', !!initData);
+  // Telegram initData
+  let initData =
+    window.Telegram?.WebApp?.initData;
 
+  // Local testing mock
   if (!initData) {
-    return setMessage('Telegram initData mavjud emas', true);
+    initData =
+      'query_id=mock&user=test&auth_date=123456&hash=abcdef';
+
+    console.log(
+      'Using mock initData for local testing'
+    );
   }
+
+  console.log(
+    'InitData present:',
+    !!initData
+  );
 
   submitButton.disabled = true;
+
   setMessage('Yuborilmoqda...');
 
   try {
     const payload = {
-      telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id || 123456789,
+      telegram_id:
+        window.Telegram?.WebApp
+          ?.initDataUnsafe?.user?.id ||
+        123456789,
+
       type: selectedType,
+
       latitude,
       longitude,
       accuracy,
+
       selfie_data: selfieData,
+
       init_data: initData,
+
       device_info: navigator.userAgent,
+
       platform: navigator.platform,
+
       capture_time: captureTime,
     };
 
-    console.log('Sending payload:', { ...payload, selfie_data: '...' });
-
-    const response = await fetch(`${API_BASE_URL}/api/attendance`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+    console.log('Sending payload:', {
+      ...payload,
+      selfie_data: '...'
     });
 
+    const response = await fetch(
+      ${API_BASE_URL}/api/attendance,
+      {
+        method: 'POST',
+
+        headers: {
+          'Content-Type': 'application/json'
+        },
+
+        body: JSON.stringify(payload),
+      }
+    );
+
     const result = await response.json();
+
     console.log('Response:', result);
 
     if (!response.ok) {
-      throw new Error(result.detail || 'Xatolik yuz berdi');
+      throw new Error(
+        result.detail ||
+        'Xatolik yuz berdi'
+      );
     }
 
-    setMessage('Davomat qabul qilindi ✓');
-    // Reset after 2 seconds
+    setMessage(
+      'Davomat qabul qilindi ✓'
+    );
+
     setTimeout(async () => {
       selfieData = '';
+
       retakeButton.style.display = 'none';
-      captureButton.style.display = 'inline-block';
+
+      captureButton.style.display =
+        'inline-block';
+
       setMessage('');
+
+      capturedImage.style.display = 'none';
+
+      video.style.display = 'block';
+
       await startCamera();
     }, 2000);
+
   } catch (err) {
     console.error('Submit error:', err);
+
     setMessage(err.message, true);
+
   } finally {
     submitButton.disabled = false;
   }
@@ -240,15 +352,22 @@ submitButton.addEventListener('click', async () => {
 // Initialize
 function init() {
   console.log('Initializing app...');
+
   startCamera();
+
   getLocation();
+
   updateClock();
+
   setInterval(updateClock, 1000);
 }
 
-// Start on DOM ready or immediately if already loaded
+// Start App
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener(
+    'DOMContentLoaded',
+    init
+  );
 } else {
   init();
 }
