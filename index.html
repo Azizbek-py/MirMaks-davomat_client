@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Davomat</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <span class="status">Davomat</span>
+      <span class="dot"></span>
+    </header>
+    <section class="panel">
+      <div class="toggle">
+        <button class="tab active" data-type="KIRISH">Kirish</button>
+        <button class="tab" data-type="CHIQISH">Chiqish</button>
+      </div>
+      <div class="hint">Yuzingizni doira ichida joylashtiring</div>
+      <div class="preview">
+        <video id="camera" autoplay playsinline muted></video>
+        <img id="captured-image" style="display: none; width: 100%; height: 100%; object-fit: cover;" />
+        <div class="frame"></div>
+      </div>
+      <div class="info-card">
+        <div class="info-row">
+          <span>Joylashuv</span>
+          <span id="location-status">Aniqlanmoqda...</span>
+        </div>
+        <div class="info-row">
+          <span>Vaqt</span>
+          <span id="clock">00:00:00</span>
+        </div>
+      </div>
+      <button id="capture" class="action primary">Rasm olish</button>
+      <button id="retake" class="action secondary" style="display: none;">Qaytadan olish</button>
+      <button id="submit" class="action secondary">OK</button>
+      <div id="message" class="message"></div>
+    </section>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
