@@ -1,26 +1,19 @@
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const SERVER = "https://mirmaks-davomat-server.onrender.com";
 
-// ─── TELEGRAM WEBAPP — employee_id URL parametrdan olinadi ───────────────────
+// ─── EMPLOYEE ID (Telegram bot URL dan uzatadi) ───────────────────────────────
 function getEmployeeId() {
-  // 1. URL query parametr: ?user_id=... yoki ?employee_id=...
   const params = new URLSearchParams(window.location.search);
   const fromUrl = params.get("user_id") || params.get("employee_id") || params.get("id");
   if (fromUrl) return fromUrl;
-
-  // 2. Telegram WebApp initData (agar mavjud bo'lsa)
   try {
     if (window.Telegram && window.Telegram.WebApp) {
       const tg = window.Telegram.WebApp;
-      tg.ready();
-      tg.expand();
-      const tgUser = (tg.initDataUnsafe || {}).user || {};
-      if (tgUser.id) return String(tgUser.id);
+      tg.ready(); tg.expand();
+      const u = (tg.initDataUnsafe || {}).user || {};
+      if (u.id) return String(u.id);
     }
-  } catch (e) {
-    console.warn("Telegram WebApp:", e);
-  }
-
+  } catch (e) {}
   return null;
 }
 
@@ -29,6 +22,7 @@ let attendanceType = "KIRISH";
 let capturedBlob   = null;
 let latitude       = null;
 let longitude      = null;
+let accuracy       = null;
 const employeeId   = getEmployeeId();
 
 // ─── DOM ──────────────────────────────────────────────────────────────────────
@@ -44,10 +38,8 @@ const tabs        = document.querySelectorAll(".tab");
 
 // ─── CLOCK ────────────────────────────────────────────────────────────────────
 function updateClock() {
-  const now = new Date();
-  clockEl.textContent = [now.getHours(), now.getMinutes(), now.getSeconds()]
-    .map(n => String(n).padStart(2, "0"))
-    .join(":");
+  clockEl.textContent = [new Date().getHours(), new Date().getMinutes(), new Date().getSeconds()]
+    .map(n => String(n).padStart(2, "0")).join(":");
 }
 setInterval(updateClock, 1000);
 updateClock();
@@ -83,6 +75,7 @@ function getLocation() {
     pos => {
       latitude  = pos.coords.latitude;
       longitude = pos.coords.longitude;
+      accuracy  = pos.coords.accuracy || 0;
       locationEl.textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
     },
     err => {
@@ -111,16 +104,13 @@ startCamera();
 // ─── CAPTURE ──────────────────────────────────────────────────────────────────
 captureBtn.addEventListener("click", () => {
   if (!video.srcObject) { showMsg("Kamera tayyor emas", true); return; }
-
   const canvas = document.createElement("canvas");
   canvas.width  = video.videoWidth  || 640;
   canvas.height = video.videoHeight || 853;
   const ctx = canvas.getContext("2d");
-  // Selfie mirror
   ctx.translate(canvas.width, 0);
   ctx.scale(-1, 1);
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
   canvas.toBlob(blob => {
     capturedBlob = blob;
     capturedImg.src = URL.createObjectURL(blob);
@@ -145,46 +135,61 @@ retakeBtn.addEventListener("click", () => {
 // ─── SUBMIT ───────────────────────────────────────────────────────────────────
 submitBtn.addEventListener("click", async () => {
   if (!capturedBlob) { showMsg("Avval rasm oling!", true); return; }
+  if (!employeeId)   { showMsg("Xodim ID aniqlanmadi! URL da ?user_id= bo'lishi kerak", true); return; }
 
   submitBtn.disabled    = true;
   submitBtn.textContent = "Yuborilmoqda...";
   showMsg("Serverga ulanilmoqda...");
 
   try {
+    // ── Rasm faqat FormData orqali, qolganlar query string orqali ─────────────
     const formData = new FormData();
-    formData.append("photo",     capturedBlob, "photo.jpg");
-    formData.append("type",      attendanceType);
-    formData.append("timestamp", new Date().toISOString());
+    formData.append("photo", capturedBlob, "photo.jpg");
 
-    if (latitude  !== null) formData.append("latitude",  String(latitude));
-    if (longitude !== null) formData.append("longitude", String(longitude));
-    if (employeeId)         formData.append("employee_id", employeeId);
-
-    const response = await fetch(`${SERVER}/api/attendance`, {
-      method: "POST",
-      body: formData
-      // Content-Type YO'Q — FormData o'zi boundary qo'shadi
+    // Query parametrlar (server shu formatda kutmoqda)
+    const query = new URLSearchParams({
+      employee_id: employeeId,
+      type:        attendanceType,
+      timestamp:   new Date().toISOString(),
+      latitude:    latitude  !== null ? latitude  : 0,
+      longitude:   longitude !== null ? longitude : 0,
+      accuracy:    accuracy  !== null ? accuracy  : 0,
     });
 
-    // Server javobini xavfsiz o'qiymiz
+    // Agar server boshqa maydon ham kutsa, shu yerga qo'shing
+    // query.set("status", "present");
+
+    const url = `${SERVER}/api/attendance?${query.toString()}`;
+
+    console.log("Yuborilayotgan URL:", url);
+
+    const response = await fetch(url, {
+      method: "POST",
+      body: formData
+    });
+
     let result = {};
     try { result = await response.json(); } catch { result = {}; }
     console.log("Server javobi:", result);
 
     if (!response.ok) {
-      let errText = "Server xatosi (" + response.status + ")";
+      let errText = `Server xatosi (${response.status})`;
       if (typeof result.detail === "string") {
         errText = result.detail;
       } else if (Array.isArray(result.detail)) {
-        // FastAPI validation xatolari massiv bo'ladi
-        errText = result.detail.map(d => d.msg || JSON.stringify(d)).join(" | ");
+        // Qaysi maydonlar yetishmayotganini aniq ko'rsatamiz
+        errText = result.detail
+          .map(d => {
+            const field = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : "?";
+            return `"${field}": ${d.msg}`;
+          })
+          .join(" | ");
       } else if (typeof result.message === "string") {
         errText = result.message;
       }
       throw new Error(errText);
     }
 
-    // ✅ Muvaffaqiyat
     const ok = result.message || result.detail || "Davomat yuborildi ✓";
     showMsg(typeof ok === "string" ? ok : "Davomat yuborildi ✓");
     setTimeout(resetUI, 3000);
