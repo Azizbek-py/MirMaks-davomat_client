@@ -6,29 +6,34 @@ const tg = window.Telegram?.WebApp || null;
 if (tg) { tg.ready(); tg.expand(); }
 
 function getTelegramId() {
-  // 1. Telegram WebApp orqali (asosiy yo'l)
-  if (tg && tg.initDataUnsafe?.user?.id) {
-    return String(tg.initDataUnsafe.user.id);
+  // 1. Telegram WebApp
+  if (tg?.initDataUnsafe?.user?.id) {
+    return tg.initDataUnsafe.user.id; // number
   }
-  // 2. URL dan (?user_id=... yoki ?telegram_id=...)
+  // 2. URL parametr
   const p = new URLSearchParams(window.location.search);
-  return p.get("telegram_id") || p.get("user_id") || p.get("id") || null;
+  const v = p.get("telegram_id") || p.get("user_id") || p.get("id");
+  if (v) return parseInt(v);
+  return null;
 }
 
 function getInitData() {
-  // Telegram WebApp initData — server tekshirish uchun ishlatadi
-  if (tg && tg.initData) return tg.initData;
-  return "";
+  return tg?.initData || "";
 }
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 let attendanceType = "KIRISH";
-let selfieBase64   = null;   // base64 string (data: prefix yo'q)
-let latitude       = null;
-let longitude      = null;
-let accuracy       = null;
-const telegramId   = getTelegramId();
-const initData     = getInitData();
+let selfieBase64   = null;
+let latitude       = 0;
+let longitude      = 0;
+let accuracy       = 0;
+
+const telegramId = getTelegramId();
+const initData   = getInitData();
+
+console.log("[DEBUG] telegramId:", telegramId);
+console.log("[DEBUG] initData uzunligi:", initData.length);
+console.log("[DEBUG] SERVER:", SERVER);
 
 // ─── DOM ──────────────────────────────────────────────────────────────────────
 const video       = document.getElementById("camera");
@@ -83,29 +88,29 @@ function getLocation() {
       longitude = pos.coords.longitude;
       accuracy  = Math.round(pos.coords.accuracy || 0);
       locationEl.textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+      console.log("[DEBUG] GPS:", latitude, longitude, "accuracy:", accuracy);
     },
     err => {
       locationEl.textContent = "Ruxsat yo'q";
-      latitude = 0; longitude = 0; accuracy = 0;
-      console.warn("GPS:", err.message);
+      console.warn("[DEBUG] GPS xato:", err.message);
     },
     { enableHighAccuracy: true, timeout: 10000 }
   );
 }
 getLocation();
 
-// ─── CAMERA (to'g'ri ko'rsatish — mirror faqat preview da) ───────────────────
+// ─── CAMERA ───────────────────────────────────────────────────────────────────
 async function startCamera() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 853 } },
+      video: { facingMode: "user", width: { ideal: 480 }, height: { ideal: 640 } },
       audio: false
     });
     video.srcObject = stream;
-    // Preview da oyna ko'rinishi (foydalanuvchi o'zini to'g'ri ko'rsin)
     video.style.transform = "scaleX(-1)";
   } catch (err) {
-    showMsg("Kamera ochilmadi: " + err.message, true);
+    showMsg("Kamera: " + err.message, true);
+    console.error("[DEBUG] Kamera:", err);
   }
 }
 startCamera();
@@ -115,20 +120,17 @@ captureBtn.addEventListener("click", () => {
   if (!video.srcObject) { showMsg("Kamera tayyor emas", true); return; }
 
   const canvas = document.createElement("canvas");
-  canvas.width  = video.videoWidth  || 640;
-  canvas.height = video.videoHeight || 853;
+  canvas.width  = 480;
+  canvas.height = 640;
   const ctx = canvas.getContext("2d");
-
-  // Rasmni NORMAL (mirror yo'q) saqlash — serverga to'g'ri boradi
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  // base64 ga o'girish (data:image/jpeg;base64,... prefix ni olib tashlaymiz)
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-  selfieBase64 = dataUrl.split(",")[1];  // faqat base64 qismi
+  const dataUrl    = canvas.toDataURL("image/jpeg", 0.7);
+  selfieBase64     = dataUrl.split(",")[1];
 
-  // Preview uchun
-  capturedImg.src = dataUrl;
-  capturedImg.style.transform = ""; // preview da mirror yo'q
+  console.log("[DEBUG] Rasm base64 uzunligi:", selfieBase64.length);
+
+  capturedImg.src           = dataUrl;
   capturedImg.style.display = "block";
   video.style.display       = "none";
   captureBtn.style.display  = "none";
@@ -149,120 +151,78 @@ retakeBtn.addEventListener("click", () => {
 // ─── SUBMIT ───────────────────────────────────────────────────────────────────
 submitBtn.addEventListener("click", async () => {
   if (!selfieBase64) { showMsg("Avval rasm oling!", true); return; }
-  if (!telegramId)   {
-    showMsg("Telegram ID aniqlanmadi! Botdan oching.", true);
-    return;
-  }
+  if (!telegramId)   { showMsg("Telegram orqali oching!", true); return; }
 
   submitBtn.disabled    = true;
   submitBtn.textContent = "Yuborilmoqda...";
   showMsg("Serverga ulanilmoqda...");
 
-  try {
-    // Server query string + JSON body yoki query string + form — tekshirib ko'ramiz
-    // Rasmdan oldingi testda server query parametr kutgan edi
-    // Shuning uchun hamma narsani query ga qo'yamiz, selfie_data ham shu yerda
+  const payload = {
+    telegram_id: telegramId,
+    type:        attendanceType,
+    latitude:    latitude,
+    longitude:   longitude,
+    accuracy:    accuracy,
+    selfie_data: selfieBase64,
+    init_data:   initData,
+    timestamp:   new Date().toISOString(),
+    platform:    navigator.userAgent,
+  };
 
-    const query = new URLSearchParams({
-      telegram_id:  telegramId,
-      type:         attendanceType,
-      timestamp:    new Date().toISOString(),
-      latitude:     latitude  !== null ? String(latitude)  : "0",
-      longitude:    longitude !== null ? String(longitude) : "0",
-      accuracy:     accuracy  !== null ? String(accuracy)  : "0",
-      selfie_data:  selfieBase64,
-      init_data:    initData,
+  console.log("[DEBUG] Yuborilayotgan payload (selfie_data uzunligi):", payload.selfie_data.length);
+  console.log("[DEBUG] URL:", SERVER + "/api/attendance");
+
+  try {
+    const response = await fetch(`${SERVER}/api/attendance`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(payload),
     });
 
-    const url = `${SERVER}/api/attendance?${query.toString()}`;
-    console.log("POST →", SERVER + "/api/attendance");
-
-    const response = await fetch(url, { method: "POST" });
+    console.log("[DEBUG] Response status:", response.status);
 
     let result = {};
-    try { result = await response.json(); } catch { result = {}; }
-    console.log("Server javobi:", result);
+    try {
+      result = await response.json();
+    } catch (e) {
+      console.warn("[DEBUG] JSON parse xato:", e);
+      result = {};
+    }
+
+    console.log("[DEBUG] Server javobi:", result);
 
     if (!response.ok) {
-      let errText = `Server xatosi (${response.status})`;
+      let errText = `Xato (${response.status})`;
       if (typeof result.detail === "string") {
         errText = result.detail;
       } else if (Array.isArray(result.detail)) {
         errText = result.detail
-          .map(d => {
-            const field = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : "?";
-            return `"${field}": ${d.msg}`;
-          }).join(" | ");
+          .map(d => `"${Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : "?"}: ${d.msg}"`)
+          .join(" | ");
       } else if (typeof result.message === "string") {
         errText = result.message;
       }
       throw new Error(errText);
     }
 
-    const ok = result.message || result.detail || "Davomat yuborildi ✓";
+    const ok = result.message || "Davomat yuborildi ✓";
     showMsg(typeof ok === "string" ? ok : "Davomat yuborildi ✓");
     setTimeout(resetUI, 3000);
 
   } catch (err) {
-    // URL juda uzun bo'lsa (selfie_data query da), JSON body ga o'tamiz
-    if (err.message && err.message.includes("414")) {
-      await submitAsJson();
-      return;
+    console.error("[DEBUG] Fetch xato:", err.name, err.message);
+
+    // "Failed to fetch" — network muammosi
+    if (err.name === "TypeError" && err.message.includes("fetch")) {
+      showMsg("Server bilan aloqa yo'q. Internet yoki server tekshiring.", true);
+    } else {
+      showMsg(typeof err.message === "string" ? err.message : "Noma'lum xato", true);
     }
-    console.error("Xato:", err);
-    showMsg(typeof err.message === "string" ? err.message : "Noma'lum xato", true);
   } finally {
     submitBtn.disabled    = false;
     submitBtn.textContent = "OK";
   }
 });
-
-// ─── FALLBACK: JSON body orqali yuborish (URL juda uzun bo'lsa) ───────────────
-async function submitAsJson() {
-  try {
-    const body = {
-      telegram_id: telegramId,
-      type:        attendanceType,
-      timestamp:   new Date().toISOString(),
-      latitude:    latitude  !== null ? latitude  : 0,
-      longitude:   longitude !== null ? longitude : 0,
-      accuracy:    accuracy  !== null ? accuracy  : 0,
-      selfie_data: selfieBase64,
-      init_data:   initData,
-    };
-
-    const response = await fetch(`${SERVER}/api/attendance`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-
-    let result = {};
-    try { result = await response.json(); } catch { result = {}; }
-
-    if (!response.ok) {
-      let errText = `Server xatosi (${response.status})`;
-      if (typeof result.detail === "string") errText = result.detail;
-      else if (Array.isArray(result.detail)) {
-        errText = result.detail
-          .map(d => {
-            const field = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : "?";
-            return `"${field}": ${d.msg}`;
-          }).join(" | ");
-      }
-      throw new Error(errText);
-    }
-
-    const ok = result.message || result.detail || "Davomat yuborildi ✓";
-    showMsg(typeof ok === "string" ? ok : "Davomat yuborildi ✓");
-    setTimeout(resetUI, 3000);
-  } catch (err) {
-    showMsg(typeof err.message === "string" ? err.message : "Noma'lum xato", true);
-  } finally {
-    submitBtn.disabled    = false;
-    submitBtn.textContent = "OK";
-  }
-}
 
 // ─── RESET ────────────────────────────────────────────────────────────────────
 function resetUI() {
