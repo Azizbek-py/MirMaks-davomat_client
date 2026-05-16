@@ -19,20 +19,25 @@ let selfieBase64   = null;
 let latitude       = 0;
 let longitude      = 0;
 let accuracy       = 0;
-let stream         = null; // kamera stream
+let camStream      = null;
 const telegramId   = getTelegramId();
 const initData     = getInitData();
 
 // ─── DOM ──────────────────────────────────────────────────────────────────────
-const video       = document.getElementById("camera");
-const capturedImg = document.getElementById("captured-image");
-const captureBtn  = document.getElementById("capture");
-const retakeBtn   = document.getElementById("retake");
-const submitBtn   = document.getElementById("submit");
-const msgBox      = document.getElementById("message");
-const locationEl  = document.getElementById("location-status");
-const clockEl     = document.getElementById("clock");
-const tabs        = document.querySelectorAll(".tab");
+const video        = document.getElementById("camera");
+const capturedImg  = document.getElementById("captured-image");
+const captureBtn   = document.getElementById("capture");
+const retakeBtn    = document.getElementById("retake");
+const submitBtn    = document.getElementById("submit");
+const msgBox       = document.getElementById("message");
+const locationEl   = document.getElementById("location-status");
+const clockEl      = document.getElementById("clock");
+const tabs         = document.querySelectorAll(".tab");
+const mainPanel    = document.getElementById("main-panel");
+const successPanel = document.getElementById("success-panel");
+const successIcon  = document.getElementById("success-icon");
+const successSub   = document.getElementById("success-sub");
+const successInfo  = document.getElementById("success-info");
 
 // ─── CLOCK ────────────────────────────────────────────────────────────────────
 function updateClock() {
@@ -53,7 +58,7 @@ function showMsg(text, isError = false) {
 }
 function clearMsg() { msgBox.textContent = ""; }
 
-// ─── TABS ─────────────────────────────────────────────────────────────────────
+// ─── TABS — KIRISH / CHIQISH ──────────────────────────────────────────────────
 tabs.forEach(tab => {
   tab.addEventListener("click", () => {
     tabs.forEach(t => t.classList.remove("active"));
@@ -81,55 +86,66 @@ function getLocation() {
 getLocation();
 
 // ─── CAMERA ───────────────────────────────────────────────────────────────────
-// FIX: video element CSS da mirror ko'rsatiladi (foydalanuvchi o'zini to'g'ri ko'rsin)
-// Lekin canvas ga chizishda MIRROR YO'Q — rasm to'g'ri saqlanadi
-video.style.transform = "scaleX(-1)";
-
 async function startCamera() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", width: { ideal: 480 }, height: { ideal: 640 } },
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user" },
       audio: false
     });
-    video.srcObject = stream;
+    video.srcObject = camStream;
   } catch (err) {
     showMsg("Kamera: " + err.message, true);
   }
 }
+
+function stopCamera() {
+  if (camStream) {
+    camStream.getTracks().forEach(t => t.stop());
+    camStream = null;
+  }
+}
+
 startCamera();
 
 // ─── CAPTURE ──────────────────────────────────────────────────────────────────
 captureBtn.addEventListener("click", () => {
   if (!video.srcObject) { showMsg("Kamera tayyor emas", true); return; }
 
+  // Video ning haqiqiy o'lchamini olamiz
+  const vw = video.videoWidth  || 480;
+  const vh = video.videoHeight || 640;
+
   const canvas = document.createElement("canvas");
-  canvas.width  = 480;
-  canvas.height = 640;
+  canvas.width  = vw;
+  canvas.height = vh;
   const ctx = canvas.getContext("2d");
 
-  // Rasmni NORMAL saqlash (mirror yo'q) — serverga to'g'ri boradi
-  ctx.drawImage(video, 0, 0, 480, 640);
+  // Rasmni NORMAL (mirror yo'q) chizamiz — server uchun to'g'ri
+  ctx.drawImage(video, 0, 0, vw, vh);
 
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
   selfieBase64  = dataUrl.split(",")[1];
 
-  // Preview da ham normal ko'rsatamiz
-  capturedImg.style.transform = "none";
-  capturedImg.src             = dataUrl;
-  capturedImg.style.display   = "block";
-  video.style.display         = "none";
-  captureBtn.style.display    = "none";
-  retakeBtn.style.display     = "block";
-  showMsg("Rasm olindi — OK tugmasini bosing");
+  // Preview: object-fit:cover CSS da bor, cho'zilmaydi
+  capturedImg.src           = dataUrl;
+  capturedImg.style.display = "block";
+  video.style.display       = "none";
+
+  captureBtn.classList.add("hidden");
+  retakeBtn.classList.remove("hidden");
+  submitBtn.classList.remove("hidden");
+
+  showMsg("Rasm olindi — Tasdiqlash tugmasini bosing");
 });
 
 // ─── RETAKE ───────────────────────────────────────────────────────────────────
 retakeBtn.addEventListener("click", () => {
-  selfieBase64                = null;
-  capturedImg.style.display   = "none";
-  video.style.display         = "block";
-  retakeBtn.style.display     = "none";
-  captureBtn.style.display    = "block";
+  selfieBase64              = null;
+  capturedImg.style.display = "none";
+  video.style.display       = "block";
+  retakeBtn.classList.add("hidden");
+  submitBtn.classList.add("hidden");
+  captureBtn.classList.remove("hidden");
   clearMsg();
 });
 
@@ -142,20 +158,19 @@ submitBtn.addEventListener("click", async () => {
   submitBtn.textContent = "Yuborilmoqda...";
   showMsg("Serverga ulanilmoqda...");
 
-  const ok = await trySendJSON();
-  if (!ok) {
-    showMsg("Server bilan aloqa o'rnatilmadi. Keyinroq urinib ko'ring.", true);
-    submitBtn.disabled    = false;
-    submitBtn.textContent = "OK";
-    return;
-  }
+  const ok = await sendAttendance();
 
-  // ✅ Muvaffaqiyat — WebApp yopish yoki tasdiq ekranini ko'rsatish
-  showSuccessScreen();
+  if (ok) {
+    stopCamera();
+    showSuccessPanel();
+  } else {
+    submitBtn.disabled    = false;
+    submitBtn.textContent = "✅ Tasdiqlash";
+  }
 });
 
-// ─── JSON BODY orqali yuborish ────────────────────────────────────────────────
-async function trySendJSON() {
+// ─── SERVER GA YUBORISH ───────────────────────────────────────────────────────
+async function sendAttendance() {
   try {
     const payload = {
       telegram_id: telegramId,
@@ -180,7 +195,7 @@ async function trySendJSON() {
 
     if (res.ok) return true;
 
-    // Xato matnini chiqarish
+    // Xato
     let errText = `Xato (${res.status})`;
     if (typeof result.detail === "string") {
       errText = result.detail;
@@ -195,113 +210,51 @@ async function trySendJSON() {
     return false;
 
   } catch (err) {
-    console.warn("[DEBUG] Fetch xato:", err.message);
+    showMsg("Server bilan aloqa yo'q", true);
     return false;
   }
 }
 
 // ─── TASDIQ EKRANI ────────────────────────────────────────────────────────────
-function showSuccessScreen() {
-  // Kamerani o'chiramiz
-  if (stream) {
-    stream.getTracks().forEach(t => t.stop());
-    stream = null;
-  }
-
+function showSuccessPanel() {
   const label = attendanceType === "KIRISH" ? "Kirish" : "Chiqish";
   const emoji = attendanceType === "KIRISH" ? "🟢" : "🔴";
+  const now   = new Date();
 
-  // Butun panelni tasdiq ekrani bilan almashtiramiz
-  const panel = document.querySelector(".panel");
-  panel.innerHTML = `
-    <div style="
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 400px;
-      gap: 24px;
-      text-align: center;
-    ">
-      <div style="
-        width: 100px;
-        height: 100px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, #00d98e, #00ff99);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 48px;
-        box-shadow: 0 0 40px rgba(0,217,142,0.5);
-        animation: pulse 1.5s infinite;
-      ">${emoji}</div>
-
-      <div>
-        <div style="font-size: 26px; font-weight: 800; color: #00d98e; margin-bottom: 8px;">
-          Muvaffaqiyatli!
-        </div>
-        <div style="font-size: 17px; color: #b0b0b0; font-weight: 600;">
-          ${label} qayd etildi ✓
-        </div>
-      </div>
-
-      <div style="
-        width: 100%;
-        padding: 18px 24px;
-        border-radius: 20px;
-        background: rgba(0,217,142,0.08);
-        border: 2px solid rgba(0,217,142,0.3);
-        font-size: 15px;
-        color: #b0b0b0;
-        line-height: 1.7;
-      ">
-        📅 ${new Date().toLocaleDateString("uz-UZ")}<br>
-        🕐 ${new Date().toLocaleTimeString("uz-UZ")}<br>
-        📍 ${latitude.toFixed(4)}, ${longitude.toFixed(4)}
-      </div>
-
-      <button onclick="closeApp()" style="
-        width: 100%;
-        padding: 18px 0;
-        border-radius: 20px;
-        background: linear-gradient(135deg, #00d98e, #00ff99);
-        color: #000;
-        font-size: 17px;
-        font-weight: 800;
-        border: none;
-        cursor: pointer;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        box-shadow: 0 10px 30px rgba(0,217,142,0.4);
-      ">Yopish</button>
-    </div>
+  successIcon.textContent = emoji;
+  successSub.textContent  = `${label} qayd etildi ✓`;
+  successInfo.innerHTML   = `
+    📅 ${now.toLocaleDateString("uz-UZ", { day:"2-digit", month:"2-digit", year:"numeric" })}<br>
+    🕐 ${now.toLocaleTimeString("uz-UZ")}<br>
+    📍 ${latitude ? `${latitude.toFixed(4)}, ${longitude.toFixed(4)}` : "Lokatsiya yo'q"}
   `;
+
+  mainPanel.classList.add("hidden");
+  successPanel.classList.remove("hidden");
 
   // 5 sekunddan keyin avtomatik yopiladi
   setTimeout(closeApp, 5000);
 }
 
-// ─── WEBAPP YOPISH ────────────────────────────────────────────────────────────
+// ─── YOPISH ───────────────────────────────────────────────────────────────────
 function closeApp() {
-  // 1. Telegram WebApp API orqali yopish (eng to'g'ri usul)
   if (tg) {
+    // Telegram WebApp — to'g'ridan yopish
     tg.close();
-    return;
+  } else {
+    // Brauzerda — bosh ekranga qaytish
+    successPanel.classList.add("hidden");
+    mainPanel.classList.remove("hidden");
+    capturedImg.style.display = "none";
+    video.style.display       = "block";
+    captureBtn.classList.remove("hidden");
+    retakeBtn.classList.add("hidden");
+    submitBtn.classList.add("hidden");
+    submitBtn.disabled        = false;
+    submitBtn.textContent     = "✅ Tasdiqlash";
+    selfieBase64              = null;
+    clearMsg();
+    startCamera();
+    getLocation();
   }
-  // 2. Brauzerda ochilgan bo'lsa — sahifani qayta yuklash
-  resetUI();
-}
-
-// ─── RESET ────────────────────────────────────────────────────────────────────
-function resetUI() {
-  selfieBase64              = null;
-  capturedImg.style.display = "none";
-  video.style.display       = "block";
-  retakeBtn.style.display   = "none";
-  captureBtn.style.display  = "block";
-  submitBtn.disabled        = false;
-  submitBtn.textContent     = "OK";
-  clearMsg();
-  startCamera();
-  getLocation();
 }
