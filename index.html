@@ -12,17 +12,22 @@
       <span class="status">Davomat</span>
       <span class="dot"></span>
     </header>
-    <section class="panel">
+
+    <!-- ASOSIY PANEL -->
+    <section class="panel" id="main-panel">
       <div class="toggle">
         <button class="tab active" data-type="KIRISH">Kirish</button>
         <button class="tab" data-type="CHIQISH">Chiqish</button>
       </div>
-      <div class="hint">Yuzingizni doira ichida joylashtiring</div>
-      <div class="preview">
+
+      <div class="hint" id="hint-text">Yuzingizni doira ichida joylashtiring</div>
+
+      <div class="preview" id="preview-box">
         <video id="camera" autoplay playsinline muted></video>
-        <img id="captured-image" style="display: none; width: 100%; height: 100%; object-fit: cover;" />
+        <img id="captured-image" />
         <div class="frame"></div>
       </div>
+
       <div class="info-card">
         <div class="info-row">
           <span>Joylashuv</span>
@@ -33,12 +38,25 @@
           <span id="clock">00:00:00</span>
         </div>
       </div>
-      <button id="capture" class="action primary">Rasm olish</button>
-      <button id="retake" class="action secondary" style="display: none;">Qaytadan olish</button>
-      <button id="submit" class="action secondary">OK</button>
+
+      <button id="capture" class="action primary">📷 Rasm olish</button>
+      <button id="retake" class="action secondary hidden">🔄 Qaytadan olish</button>
+      <button id="submit" class="action secondary hidden">✅ Tasdiqlash</button>
       <div id="message" class="message"></div>
     </section>
+
+    <!-- TASDIQ EKRANI -->
+    <section class="panel hidden" id="success-panel">
+      <div class="success-screen">
+        <div class="success-icon" id="success-icon">🟢</div>
+        <div class="success-title">Muvaffaqiyatli!</div>
+        <div class="success-sub" id="success-sub">Kirish qayd etildi ✓</div>
+        <div class="success-info" id="success-info"></div>
+        <button class="action primary" onclick="closeApp()">Yopish</button>
+      </div>
+    </section>
   </div>
+
   <script src="app.js"></script>
 </body>
 </html>
