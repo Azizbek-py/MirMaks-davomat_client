@@ -20,6 +20,7 @@ let latitude       = 0;
 let longitude      = 0;
 let accuracy       = 0;
 let camStream      = null;
+let serverReady    = false;
 const telegramId   = getTelegramId();
 const initData     = getInitData();
 
@@ -85,6 +86,22 @@ function getLocation() {
 }
 getLocation();
 
+// ─── SERVER UYG'OTISH (app ochilganda darhol) ─────────────────────────────────
+async function wakeUpServer() {
+  // Foydalanuvchi hali rasm olayotganda server uyg'onib bo'ladi
+  try {
+    const res = await fetch(`${SERVER}/`, { method: "GET" });
+    if (res.ok) {
+      serverReady = true;
+      console.log("[SERVER] Tayyor ✓");
+    }
+  } catch {
+    // Uyg'onmasa ham yuborishda qayta urinadi
+    console.warn("[SERVER] Uyg'otib bo'lmadi, keyinroq urinamiz");
+  }
+}
+wakeUpServer(); // App ochilishi bilan darhol ping
+
 // ─── CAMERA ───────────────────────────────────────────────────────────────────
 async function startCamera() {
   try {
@@ -119,15 +136,10 @@ captureBtn.addEventListener("click", () => {
   canvas.height = vh;
   const ctx = canvas.getContext("2d");
 
-  // ─── MIRROR FIX ───────────────────────────────────────────────────────────
-  // Video CSS da scaleX(-1) bilan mirror ko'rsatiladi.
-  // Preview da foydalanuvchi o'zini mirror ko'radi — bu tabiiy (selfie).
-  // Rasmga olganda ham MIRROR saqlansin — foydalanuvchi ko'rgan narsa = saqlangan rasm.
-  // Buning uchun canvas da ham scaleX(-1) qilamiz:
-  ctx.translate(vw, 0);   // o'ng tomonga siljitamiz
-  ctx.scale(-1, 1);       // gorizontal mirror
+  // Mirror — livecam bilan bir xil ko'rinsin
+  ctx.translate(vw, 0);
+  ctx.scale(-1, 1);
   ctx.drawImage(video, 0, 0, vw, vh);
-  // ──────────────────────────────────────────────────────────────────────────
 
   const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
   selfieBase64  = dataUrl.split(",")[1];
@@ -163,7 +175,14 @@ submitBtn.addEventListener("click", async () => {
   submitBtn.textContent = "Yuborilmoqda...";
   showMsg("Serverga ulanilmoqda...");
 
-  const ok = await sendAttendance();
+  // Server hali tayyor bo'lmasa — uyg'otib kutamiz
+  if (!serverReady) {
+    showMsg("Server uyg'onmoqda... (30 soniya)");
+    await wakeUpServer();
+  }
+
+  // 3 marta urinib ko'radi
+  const ok = await sendWithRetry(3);
 
   if (ok) {
     stopCamera();
@@ -173,6 +192,31 @@ submitBtn.addEventListener("click", async () => {
     submitBtn.textContent = "✅ Tasdiqlash";
   }
 });
+
+// ─── RETRY MEXANIZMI ──────────────────────────────────────────────────────────
+async function sendWithRetry(maxAttempts) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1) {
+      showMsg(`Qayta urinish ${attempt}/${maxAttempts}...`);
+      await sleep(3000); // 3 soniya kutib qayta urinadi
+    }
+
+    const ok = await sendAttendance();
+    if (ok) return true;
+
+    // Agar server uxlab qolgan bo'lsa — uyg'otib qayta urinamiz
+    if (attempt < maxAttempts) {
+      showMsg("Server uyg'onmoqda...");
+      await wakeUpServer();
+    }
+  }
+  showMsg("Server bilan aloqa o'rnatilmadi. Keyinroq urinib ko'ring.", true);
+  return false;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 // ─── SERVER GA YUBORISH ───────────────────────────────────────────────────────
 async function sendAttendance() {
@@ -213,9 +257,8 @@ async function sendAttendance() {
     showMsg(errText, true);
     return false;
 
-  } catch (err) {
-    showMsg("Server bilan aloqa yo'q", true);
-    return false;
+  } catch {
+    return false; // retry uchun false qaytaradi
   }
 }
 
