@@ -58,7 +58,7 @@ function showMsg(text, isError = false) {
 }
 function clearMsg() { msgBox.textContent = ""; }
 
-// ─── TABS — KIRISH / CHIQISH ──────────────────────────────────────────────────
+// ─── TABS ─────────────────────────────────────────────────────────────────────
 tabs.forEach(tab => {
   tab.addEventListener("click", () => {
     tabs.forEach(t => t.classList.remove("active"));
@@ -111,7 +111,6 @@ startCamera();
 captureBtn.addEventListener("click", () => {
   if (!video.srcObject) { showMsg("Kamera tayyor emas", true); return; }
 
-  // Video ning haqiqiy o'lchamini olamiz
   const vw = video.videoWidth  || 480;
   const vh = video.videoHeight || 640;
 
@@ -120,13 +119,19 @@ captureBtn.addEventListener("click", () => {
   canvas.height = vh;
   const ctx = canvas.getContext("2d");
 
-  // Rasmni NORMAL (mirror yo'q) chizamiz — server uchun to'g'ri
+  // ─── MIRROR FIX ───────────────────────────────────────────────────────────
+  // Video CSS da scaleX(-1) bilan mirror ko'rsatiladi.
+  // Preview da foydalanuvchi o'zini mirror ko'radi — bu tabiiy (selfie).
+  // Rasmga olganda ham MIRROR saqlansin — foydalanuvchi ko'rgan narsa = saqlangan rasm.
+  // Buning uchun canvas da ham scaleX(-1) qilamiz:
+  ctx.translate(vw, 0);   // o'ng tomonga siljitamiz
+  ctx.scale(-1, 1);       // gorizontal mirror
   ctx.drawImage(video, 0, 0, vw, vh);
+  // ──────────────────────────────────────────────────────────────────────────
 
   const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
   selfieBase64  = dataUrl.split(",")[1];
 
-  // Preview: object-fit:cover CSS da bor, cho'zilmaydi
   capturedImg.src           = dataUrl;
   capturedImg.style.display = "block";
   video.style.display       = "none";
@@ -195,7 +200,6 @@ async function sendAttendance() {
 
     if (res.ok) return true;
 
-    // Xato
     let errText = `Xato (${res.status})`;
     if (typeof result.detail === "string") {
       errText = result.detail;
@@ -232,17 +236,14 @@ function showSuccessPanel() {
   mainPanel.classList.add("hidden");
   successPanel.classList.remove("hidden");
 
-  // 5 sekunddan keyin avtomatik yopiladi
   setTimeout(closeApp, 5000);
 }
 
 // ─── YOPISH ───────────────────────────────────────────────────────────────────
 function closeApp() {
   if (tg) {
-    // Telegram WebApp — to'g'ridan yopish
     tg.close();
   } else {
-    // Brauzerda — bosh ekranga qaytish
     successPanel.classList.add("hidden");
     mainPanel.classList.remove("hidden");
     capturedImg.style.display = "none";
