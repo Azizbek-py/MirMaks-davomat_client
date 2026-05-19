@@ -195,27 +195,36 @@ submitBtn.addEventListener("click", async () => {
 
 // ─── RETRY MEXANIZMI ──────────────────────────────────────────────────────────
 async function sendWithRetry(maxAttempts) {
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+
     if (attempt > 1) {
       showMsg(`Qayta urinish ${attempt}/${maxAttempts}...`);
-      await sleep(3000); // 3 soniya kutib qayta urinadi
+      await sleep(3000);
     }
 
-    const ok = await sendAttendance();
-    if (ok) return true;
+    const result = await sendAttendance();
 
-    // Agar server uxlab qolgan bo'lsa — uyg'otib qayta urinamiz
+    // SUCCESS
+    if (result.success) {
+      return true;
+    }
+
+    // BACKEND XATOSI — retry qilmaymiz
+    if (!result.retry) {
+      showMsg(result.message, true);
+      return false;
+    }
+
+    // NETWORK/SERVER XATOSI
     if (attempt < maxAttempts) {
       showMsg("Server uyg'onmoqda...");
       await wakeUpServer();
     }
   }
+
   showMsg("Server bilan aloqa o'rnatilmadi. Keyinroq urinib ko'ring.", true);
   return false;
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // ─── SERVER GA YUBORISH ───────────────────────────────────────────────────────
@@ -240,11 +249,20 @@ async function sendAttendance() {
     });
 
     let result = {};
-    try { result = await res.json(); } catch { result = {}; }
+    try {
+      result = await res.json();
+    } catch {}
 
-    if (res.ok) return true;
+    // SUCCESS
+    if (res.ok) {
+      return {
+        success: true
+      };
+    }
 
+    // BACKEND XATOSI
     let errText = `Xato (${res.status})`;
+
     if (typeof result.detail === "string") {
       errText = result.detail;
     } else if (Array.isArray(result.detail)) {
@@ -254,11 +272,21 @@ async function sendAttendance() {
     } else if (typeof result.message === "string") {
       errText = result.message;
     }
-    showMsg(errText, true);
-    return false;
+
+    // Bu server alive degani — retry qilinmaydi
+    return {
+      success: false,
+      retry: false,
+      message: errText
+    };
 
   } catch {
-    return false; // retry uchun false qaytaradi
+    // Faqat network/server dead bo'lsa retry
+    return {
+      success: false,
+      retry: true,
+      message: "Server bilan aloqa yo'q"
+    };
   }
 }
 
