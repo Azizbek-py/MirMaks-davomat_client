@@ -1,17 +1,14 @@
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const SERVER = "https://mirmaks-davomat-server.onrender.com";
 
-// ─── TELEGRAM WEBAPP ──────────────────────────────────────────────────────────
-const tg = window.Telegram?.WebApp || null;
-if (tg) { tg.ready(); tg.expand(); }
+// ─── TELEGRAM SDK YO'Q — brauzerda ishlaymiz ──────────────────────────────────
+// Telegram WebApp SDK kerak emas, init_data ham yuborilmaydi
 
 function getTelegramId() {
-  if (tg?.initDataUnsafe?.user?.id) return tg.initDataUnsafe.user.id;
   const p = new URLSearchParams(window.location.search);
   const v = p.get("telegram_id") || p.get("user_id") || p.get("id");
   return v ? parseInt(v) : null;
 }
-function getInitData() { return tg?.initData || ""; }
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 let attendanceType = "KIRISH";
@@ -21,8 +18,9 @@ let longitude      = 0;
 let accuracy       = 0;
 let camStream      = null;
 let serverReady    = false;
+let gpsReady       = false;
+let watchId        = null;
 const telegramId   = getTelegramId();
-const initData     = getInitData();
 
 // ─── DOM ──────────────────────────────────────────────────────────────────────
 const video        = document.getElementById("camera");
@@ -39,6 +37,23 @@ const successPanel = document.getElementById("success-panel");
 const successIcon  = document.getElementById("success-icon");
 const successSub   = document.getElementById("success-sub");
 const successInfo  = document.getElementById("success-info");
+
+// ─── TELEGRAM ID TEKSHIRISH ───────────────────────────────────────────────────
+if (!telegramId) {
+  document.body.innerHTML = `
+    <div style="
+      display:flex; flex-direction:column; align-items:center;
+      justify-content:center; height:100vh; padding:24px;
+      font-family:sans-serif; text-align:center; background:#0f0f0f; color:#fff;
+    ">
+      <div style="font-size:48px; margin-bottom:16px;">⚠️</div>
+      <div style="font-size:18px; font-weight:bold; margin-bottom:8px;">Havola noto'g'ri</div>
+      <div style="font-size:14px; color:#aaa;">
+        Telegram bot orqali yuborilgan havoladan oching
+      </div>
+    </div>
+  `;
+}
 
 // ─── CLOCK ────────────────────────────────────────────────────────────────────
 function updateClock() {
@@ -70,13 +85,8 @@ tabs.forEach(tab => {
 });
 
 // ─── GPS ──────────────────────────────────────────────────────────────────────
-// Android WebView'da GPS ishonchli ishlashi uchun:
-// 1. watchPosition — bir marta emas, doimiy kuzatadi
-// 2. enableHighAccuracy: false — avval tez (network) lokatsiya oladi
-// 3. Ikki bosqichli: avval tez, keyin aniq
-
-let gpsReady = false;
-let watchId  = null;
+// Brauzerda GPS so'rovi — foydalanuvchi ruxsat berishi kerak bo'ladi
+// Android Chrome'da permission dialog chiqadi — bu normal
 
 function startGPS() {
   if (!navigator.geolocation) {
@@ -86,50 +96,37 @@ function startGPS() {
 
   locationEl.textContent = "GPS aniqlanmoqda...";
 
-  // 1-bosqich: network orqali tez olish (Android'da 1-2 soniyada ishlaydi)
+  // 1-bosqich: tez (network/WiFi) lokatsiya
   navigator.geolocation.getCurrentPosition(
-    pos => onGPSSuccess(pos, "tez"),
-    err => onGPSError(err, "tez"),
+    pos => onGPSSuccess(pos),
+    err => onGPSError(err),
     { enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 }
   );
 
-  // 2-bosqich: GPS orqali aniq olish (parallel ishga tushadi)
+  // 2-bosqich: aniq GPS, parallel
   watchId = navigator.geolocation.watchPosition(
-    pos => onGPSSuccess(pos, "aniq"),
-    err => onGPSError(err, "aniq"),
+    pos => onGPSSuccess(pos),
+    () => {},
     { enableHighAccuracy: true, timeout: 30000, maximumAge: 5000 }
   );
 }
 
-function onGPSSuccess(pos, source) {
+function onGPSSuccess(pos) {
   latitude  = pos.coords.latitude;
   longitude = pos.coords.longitude;
   accuracy  = Math.round(pos.coords.accuracy || 0);
   gpsReady  = true;
   locationEl.textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)} ±${accuracy}m`;
-
-  // Aniq GPS olindi — watchni to'xtatamiz
-  if (source === "aniq" && watchId !== null) {
-    navigator.geolocation.clearWatch(watchId);
-    watchId = null;
-  }
 }
 
-function onGPSError(err, source) {
-  // Tez rejim xato berganda aniq rejim hali ishlaydi — xabar chiqarmaymiz
-  if (source === "tez") return;
-
+function onGPSError(err) {
   const msgs = {
-    1: "GPS ruxsati yo'q — telefon sozlamalaridan ruxsat bering",
-    2: "GPS signal topilmadi — ochiq joyga chiqing",
-    3: "GPS vaqt tugadi — qayta urinmoqda..."
+    1: "GPS ruxsati berilmagan",
+    2: "GPS signal topilmadi",
+    3: "GPS vaqt tugadi"
   };
   locationEl.textContent = msgs[err.code] || "GPS xato";
-
-  // Timeout bo'lsa qayta urinib ko'ramiz
-  if (err.code === 3) {
-    setTimeout(startGPS, 3000);
-  }
+  if (err.code === 3) setTimeout(startGPS, 3000);
 }
 
 startGPS();
@@ -138,47 +135,31 @@ startGPS();
 async function wakeUpServer() {
   try {
     const res = await fetch(`${SERVER}/`, { method: "GET" });
-    if (res.ok) { serverReady = true; }
-  } catch {
-    // keyinroq qayta uriniladi
-  }
+    if (res.ok) serverReady = true;
+  } catch {}
 }
 wakeUpServer();
 
 // ─── CAMERA ───────────────────────────────────────────────────────────────────
-// Android Telegram WebView'da kamera qorong'u bo'lishining sabablari:
-// 1. getUserMedia qaytgunga qadar video.play() chaqirilmaydi
-// 2. srcObject o'rnatilgach loadedmetadata kutilmaydi
-// 3. Constraints juda qattiq bo'lsa oqim tashlanadi
-// 4. WebView kamera ruxsatini alohida so'raydi
+// Brauzerda (Chrome Android, Firefox, Safari) getUserMedia yaxshi ishlaydi
+// Telegram WebView'dagi cheklovlar yo'q
 
 async function startCamera() {
   stopCamera();
 
-  // Video atributlarini JS orqali ham o'rnatamiz (HTML'ga qo'shimcha)
-  video.setAttribute("autoplay", "");
-  video.setAttribute("playsinline", "");
-  video.setAttribute("muted", "");
-  video.muted      = true;
+  video.muted       = true;
   video.playsInline = true;
 
-  // Android uchun constraints — qattiq emas, ideal
+  // Brauzerda constraints ancha ishonchli ishlaydi
   const constraintsList = [
-    // 1-urinish: old kamera, ideal o'lcham
+    // 1-urinish: old kamera, yaxshi sifat
     {
-      video: {
-        facingMode: { ideal: "user" },
-        width:  { ideal: 640 },
-        height: { ideal: 480 }
-      },
+      video: { facingMode: { ideal: "user" }, width: { ideal: 640 }, height: { ideal: 480 } },
       audio: false
     },
-    // 2-urinish: facingMode'siz
+    // 2-urinish: istalgan kamera
     {
-      video: {
-        width:  { ideal: 640 },
-        height: { ideal: 480 }
-      },
+      video: { width: { ideal: 640 }, height: { ideal: 480 } },
       audio: false
     },
     // 3-urinish: eng oddiy
@@ -187,84 +168,48 @@ async function startCamera() {
 
   for (let i = 0; i < constraintsList.length; i++) {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(constraintsList[i]);
-      camStream      = stream;
+      const stream    = await navigator.mediaDevices.getUserMedia(constraintsList[i]);
+      camStream       = stream;
       video.srcObject = stream;
-
-      // Android'da MUHIM: srcObject o'rnatilgach play() chaqirilishi kerak
-      // va loadedmetadata hodisasini kutish shart
       await waitForVideoReady();
-
-      console.log(`[CAM] Ishladi (${i + 1}-urinish): ${video.videoWidth}x${video.videoHeight}`);
-      showMsg(""); // xato xabarni tozalash
-      return; // muvaffaqiyatli — chiqamiz
-
+      return;
     } catch (err) {
-      console.warn(`[CAM] ${i + 1}-urinish xato: ${err.name} — ${err.message}`);
       stopCamera();
-
       if (err.name === "NotAllowedError") {
-        showMsg("Kamera ruxsati berilmagan — telefon sozlamalaridan ruxsat bering", true);
-        return; // ruxsat yo'q — qayta urinishning foydasi yo'q
+        showMsg("Kamera ruxsati berilmagan — brauzer sozlamalaridan ruxsat bering", true);
+        return;
       }
-      // Boshqa xatolarda keyingi constraints bilan davom etamiz
     }
   }
 
-  showMsg("Kamera ishlamadi — brauzer kamerani qo'llab-quvvatlamayapti", true);
+  showMsg("Kamera ishlamadi", true);
 }
 
-// Android'da video tayyor bo'lguncha kutish
 function waitForVideoReady() {
-  return new Promise((resolve) => {
-    // play() ni chaqiramiz
-    const playPromise = video.play();
-    if (playPromise) {
-      playPromise.catch(() => {}); // xatoni e'tiborsiz qoldiramiz
-    }
-
-    // Allaqachon tayyor bo'lsa — darhol
-    if (video.readyState >= 3 && video.videoWidth > 0) {
-      resolve();
-      return;
-    }
-
-    let resolved = false;
-
-    const done = () => {
-      if (!resolved) {
-        resolved = true;
-        resolve();
-      }
+  return new Promise(resolve => {
+    const tryPlay = () => {
+      const p = video.play();
+      if (p) p.catch(() => {});
     };
 
-    // loadeddata — metadata + birinchi frame tayyor
-    video.addEventListener("loadeddata", done, { once: true });
+    if (video.readyState >= 3 && video.videoWidth > 0) { tryPlay(); resolve(); return; }
 
-    // canplay — oqim o'ynashga tayyor
-    video.addEventListener("canplay", done, { once: true });
+    let done = false;
+    const finish = () => { if (!done) { done = true; tryPlay(); resolve(); } };
 
-    // videoWidth pollingsi — ba'zi Android'da hodisalar otib ketadi
+    video.addEventListener("canplay",     finish, { once: true });
+    video.addEventListener("loadeddata",  finish, { once: true });
+
     const poll = setInterval(() => {
-      if (video.videoWidth > 0) {
-        clearInterval(poll);
-        done();
-      }
+      if (video.videoWidth > 0) { clearInterval(poll); finish(); }
     }, 100);
 
-    // 5 soniyada majburiy hal — kutishni tugatamiz
-    setTimeout(() => {
-      clearInterval(poll);
-      done();
-    }, 5000);
+    setTimeout(() => { clearInterval(poll); finish(); }, 5000);
   });
 }
 
 function stopCamera() {
-  if (camStream) {
-    camStream.getTracks().forEach(t => t.stop());
-    camStream = null;
-  }
+  if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
   video.srcObject = null;
 }
 
@@ -275,14 +220,10 @@ captureBtn.addEventListener("click", () => {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
 
-  if (!camStream) {
-    showMsg("Kamera ulanmagan", true);
-    return;
-  }
+  if (!camStream) { showMsg("Kamera ulanmagan", true); return; }
 
   if (!vw || !vh) {
-    // Video hali tayyor emas — kutib qayta urinib ko'ramiz
-    showMsg("Kamera yuklanmoqda, bir soniya...", true);
+    showMsg("Kamera yuklanmoqda...", true);
     waitForVideoReady().then(() => {
       if (video.videoWidth > 0) captureBtn.click();
       else showMsg("Kamera tayyor emas, qayta bosing", true);
@@ -290,12 +231,12 @@ captureBtn.addEventListener("click", () => {
     return;
   }
 
-  const canvas = document.createElement("canvas");
+  const canvas  = document.createElement("canvas");
   canvas.width  = vw;
   canvas.height = vh;
-  const ctx = canvas.getContext("2d");
+  const ctx     = canvas.getContext("2d");
 
-  // Mirror
+  // Mirror — old kamera ko'zgudek ko'rinsin
   ctx.translate(vw, 0);
   ctx.scale(-1, 1);
   ctx.drawImage(video, 0, 0, vw, vh);
@@ -329,7 +270,7 @@ retakeBtn.addEventListener("click", async () => {
 // ─── SUBMIT ───────────────────────────────────────────────────────────────────
 submitBtn.addEventListener("click", async () => {
   if (!selfieBase64) { showMsg("Avval rasm oling!", true); return; }
-  if (!telegramId)   { showMsg("Telegram orqali oching!", true); return; }
+  if (!telegramId)   { showMsg("Havola noto'g'ri!", true); return; }
 
   if (!gpsReady) {
     showMsg("GPS hali aniqlanmadi, kuting...", true);
@@ -349,10 +290,7 @@ submitBtn.addEventListener("click", async () => {
 
   if (ok) {
     stopCamera();
-    if (watchId !== null) {
-      navigator.geolocation.clearWatch(watchId);
-      watchId = null;
-    }
+    if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
     showSuccessPanel();
   } else {
     submitBtn.disabled    = false;
@@ -365,10 +303,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function sendWithRetry(maxAttempts) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (attempt > 1) {
-      showMsg(`Qayta urinish ${attempt}/${maxAttempts}...`);
-      await sleep(3000);
-    }
+    if (attempt > 1) { showMsg(`Qayta urinish ${attempt}/${maxAttempts}...`); await sleep(3000); }
     const result = await sendAttendance();
     if (result.success) return true;
     if (!result.retry) { showMsg(result.message, true); return false; }
@@ -388,7 +323,7 @@ async function sendAttendance() {
       longitude,
       accuracy,
       selfie_data: selfieBase64,
-      init_data:   initData,
+      init_data:   "",           // brauzerda init_data yo'q
       timestamp:   new Date().toISOString(),
       platform:    navigator.userAgent,
     };
@@ -432,14 +367,9 @@ function showSuccessPanel() {
 
   mainPanel.classList.add("hidden");
   successPanel.classList.remove("hidden");
-  setTimeout(closeApp, 5000);
-}
 
-// ─── YOPISH ───────────────────────────────────────────────────────────────────
-function closeApp() {
-  if (tg) {
-    tg.close();
-  } else {
+  // Brauzerda sahifani yopish mumkin emas — faqat success ko'rsatamiz
+  setTimeout(() => {
     successPanel.classList.add("hidden");
     mainPanel.classList.remove("hidden");
     capturedImg.style.display = "none";
@@ -453,5 +383,24 @@ function closeApp() {
     clearMsg();
     startCamera();
     startGPS();
-  }
+  }, 5000);
+}
+
+// ─── YOPISH ───────────────────────────────────────────────────────────────────
+// Brauzerda window.close() faqat JS tomonidan ochilgan tabni yopa oladi
+// Shuning uchun foydalanuvchiga xabar ko'rsatamiz
+function closeApp() {
+  successPanel.classList.add("hidden");
+  mainPanel.classList.remove("hidden");
+  capturedImg.style.display = "none";
+  video.style.display       = "block";
+  captureBtn.classList.remove("hidden");
+  retakeBtn.classList.add("hidden");
+  submitBtn.classList.add("hidden");
+  submitBtn.disabled        = false;
+  submitBtn.textContent     = "✅ Tasdiqlash";
+  selfieBase64              = null;
+  clearMsg();
+  startCamera();
+  startGPS();
 }
