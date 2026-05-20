@@ -2,9 +2,58 @@
 <html lang="uz">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <!--
+    FIX 1: user-scalable=no — Android'da zoom bo'lishini oldini oladi
+    FIX 2: viewport-fit=cover — iPhone notch uchun
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+  <!--
+    FIX 3: HTTPS shart — HTTP'da getUserMedia va geolocation ISHLAMAYDI
+    Quyidagi meta HTTPS'ga yo'naltirish uchun emas, shunchaki eslatma
+  -->
+
+  <!--
+    FIX 4: Telegram WebApp kamera ruxsatini so'rashi uchun
+    Bu meta Android Telegram'da kamera permission dialogini ishga tushiradi
+  -->
+  <meta http-equiv="Permissions-Policy" content="camera=*, microphone=(), geolocation=*" />
+
   <title>Davomat</title>
   <link rel="stylesheet" href="style.css" />
+
+  <style>
+    /*
+      FIX 5: Android'da video qorong'u bo'lishining CSS sababi —
+      ba'zi Android brauzerlar video'ni transform yoki overflow:hidden
+      ichida to'g'ri render qilmaydi. Quyidagi stil buni tuzatadi.
+    */
+    #camera {
+      /* Hardware acceleration majburan yoqamiz */
+      -webkit-transform: scaleX(-1);
+      transform: scaleX(-1);
+      /* Android WebView uchun GPU layer yaratamiz */
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      will-change: transform;
+      /* O'lcham aniq bo'lishi kerak */
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      background: #111;
+    }
+
+    /* Rasm olinganda mirror qo'llamaymiz */
+    #captured-image {
+      -webkit-transform: none;
+      transform: none;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+    }
+  </style>
 </head>
 <body>
   <div class="shell">
@@ -23,8 +72,22 @@
       <div class="hint" id="hint-text">Yuzingizni doira ichida joylashtiring</div>
 
       <div class="preview" id="preview-box">
-        <video id="camera" autoplay playsinline muted></video>
-        <img id="captured-image" />
+        <!--
+          FIX 6: video tegi — barcha muhim atributlar bir joyda
+          - autoplay: avtomatik boshlash
+          - playsinline: iOS + Android WebView'da fullscreen emas, inline
+          - muted: Android'da autoplay faqat muted bilan ishlaydi
+          - webkit-playsinline: eski iOS uchun
+        -->
+        <video
+          id="camera"
+          autoplay
+          playsinline
+          muted
+          webkit-playsinline
+          x-webkit-airplay="deny"
+        ></video>
+        <img id="captured-image" alt="selfie" />
         <div class="frame"></div>
       </div>
 
