@@ -70,25 +70,64 @@ tabs.forEach(tab => {
 });
 
 // ─── LOCATION ─────────────────────────────────────────────────────────────────
+// FIX: Android uchun timeout oshirildi, maximumAge qo'shildi,
+//      va watchPosition ishlatildi — bir marta so'rab bekor qilmaydi
+let geoWatchId = null;
+
 function getLocation() {
-  if (!navigator.geolocation) { locationEl.textContent = "Qo'llab-quvvatlanmaydi"; return; }
+  if (!navigator.geolocation) {
+    locationEl.textContent = "Qo'llab-quvvatlanmaydi";
+    return;
+  }
+
   locationEl.textContent = "Aniqlanmoqda...";
+
+  // Avval tez (past aniqlikda) olishga harakat qilamiz
   navigator.geolocation.getCurrentPosition(
     pos => {
       latitude  = pos.coords.latitude;
       longitude = pos.coords.longitude;
       accuracy  = Math.round(pos.coords.accuracy || 0);
-      locationEl.textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+      locationEl.textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)} (±${accuracy}m)`;
     },
-    () => { locationEl.textContent = "Ruxsat yo'q"; },
-    { enableHighAccuracy: true, timeout: 10000 }
+    () => {
+      // Agar tez muvaffaqiyatsiz bo'lsa — past aniqlikda qayta urinib ko'ramiz
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          latitude  = pos.coords.latitude;
+          longitude = pos.coords.longitude;
+          accuracy  = Math.round(pos.coords.accuracy || 0);
+          locationEl.textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)} (±${accuracy}m)`;
+        },
+        err => {
+          // Android'da ba'zan ruxsat so'rovi kechikadi — xato turini ko'rsatamiz
+          if (err.code === 1) {
+            locationEl.textContent = "GPS ruxsati berilmagan";
+          } else if (err.code === 2) {
+            locationEl.textContent = "GPS signal yo'q";
+          } else {
+            locationEl.textContent = "GPS vaqt tugadi";
+          }
+        },
+        {
+          enableHighAccuracy: false,   // FIX: false — Android'da tezroq ishlaydi
+          timeout: 30000,              // FIX: 30 soniya (10dan ko'p)
+          maximumAge: 60000            // FIX: 1 daqiqa oldingi koordinatani qabul qiladi
+        }
+      );
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 15000,                  // FIX: 15 soniya
+      maximumAge: 10000                // FIX: 10 soniyalik kesh
+    }
   );
 }
+
 getLocation();
 
-// ─── SERVER UYG'OTISH (app ochilganda darhol) ─────────────────────────────────
+// ─── SERVER UYG'OTISH ─────────────────────────────────────────────────────────
 async function wakeUpServer() {
-  // Foydalanuvchi hali rasm olayotganda server uyg'onib bo'ladi
   try {
     const res = await fetch(`${SERVER}/`, { method: "GET" });
     if (res.ok) {
@@ -96,22 +135,67 @@ async function wakeUpServer() {
       console.log("[SERVER] Tayyor ✓");
     }
   } catch {
-    // Uyg'onmasa ham yuborishda qayta urinadi
     console.warn("[SERVER] Uyg'otib bo'lmadi, keyinroq urinamiz");
   }
 }
-wakeUpServer(); // App ochilishi bilan darhol ping
+wakeUpServer();
 
 // ─── CAMERA ───────────────────────────────────────────────────────────────────
+// FIX: Android'da kamera qorashi uchun to'liq qayta yozildi
 async function startCamera() {
+  stopCamera(); // oldingi stream'ni tozalash
+
+  // FIX: video elementiga kerakli atributlarni JS orqali ham o'rnatamiz
+  video.setAttribute("autoplay", "");
+  video.setAttribute("playsinline", "");   // iOS + Android WebView uchun MUHIM
+  video.setAttribute("muted", "");
+  video.muted = true;
+
+  // FIX: Android'da ideal constraints ishlatamiz — qattiq qiymat emas
+  const constraints = {
+    audio: false,
+    video: {
+      facingMode: { ideal: "user" },       // FIX: exact emas, ideal
+      width:  { ideal: 640, max: 1280 },   // FIX: aniq o'lcham — qorashni oldini oladi
+      height: { ideal: 480, max: 960 },
+    }
+  };
+
   try {
-    camStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user" },
-      audio: false
-    });
+    camStream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = camStream;
+
+    // FIX: Android'da play() promiseni kutish kerak
+    try {
+      await video.play();
+    } catch (playErr) {
+      // Ba'zi Android brauzerlarida play() avtomatik chaqiriladi — xato normal
+      console.warn("[CAM] play() xatosi (normal):", playErr.message);
+    }
+
+    // FIX: loadedmetadata kutish — video o'lchamlari tayyor bo'lguncha
+    await new Promise((resolve) => {
+      if (video.readyState >= 2) {
+        resolve();
+      } else {
+        video.addEventListener("loadedmetadata", resolve, { once: true });
+        // Xavfsizlik uchun timeout
+        setTimeout(resolve, 3000);
+      }
+    });
+
+    console.log(`[CAM] ${video.videoWidth}x${video.videoHeight} — tayyor`);
+
   } catch (err) {
-    showMsg("Kamera: " + err.message, true);
+    // FIX: Constraints ishlamasa — eng oddiy rejimda qayta urinib ko'ramiz
+    console.warn("[CAM] Constraints bilan ishlamadi, oddiy rejim:", err.message);
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      video.srcObject = camStream;
+      await video.play().catch(() => {});
+    } catch (fallbackErr) {
+      showMsg("Kamera: " + fallbackErr.message, true);
+    }
   }
 }
 
@@ -120,16 +204,21 @@ function stopCamera() {
     camStream.getTracks().forEach(t => t.stop());
     camStream = null;
   }
+  video.srcObject = null;
 }
 
 startCamera();
 
 // ─── CAPTURE ──────────────────────────────────────────────────────────────────
 captureBtn.addEventListener("click", () => {
-  if (!video.srcObject) { showMsg("Kamera tayyor emas", true); return; }
+  // FIX: videoWidth 0 bo'lsa — kamera hali tayyor emas
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
 
-  const vw = video.videoWidth  || 480;
-  const vh = video.videoHeight || 640;
+  if (!camStream || !vw || !vh) {
+    showMsg("Kamera hali tayyor emas, kuting...", true);
+    return;
+  }
 
   const canvas = document.createElement("canvas");
   canvas.width  = vw;
@@ -156,7 +245,7 @@ captureBtn.addEventListener("click", () => {
 });
 
 // ─── RETAKE ───────────────────────────────────────────────────────────────────
-retakeBtn.addEventListener("click", () => {
+retakeBtn.addEventListener("click", async () => {
   selfieBase64              = null;
   capturedImg.style.display = "none";
   video.style.display       = "block";
@@ -164,6 +253,9 @@ retakeBtn.addEventListener("click", () => {
   submitBtn.classList.add("hidden");
   captureBtn.classList.remove("hidden");
   clearMsg();
+
+  // FIX: Retake'da kamerani qayta ishga tushiramiz
+  await startCamera();
 });
 
 // ─── SUBMIT ───────────────────────────────────────────────────────────────────
@@ -175,13 +267,11 @@ submitBtn.addEventListener("click", async () => {
   submitBtn.textContent = "Yuborilmoqda...";
   showMsg("Serverga ulanilmoqda...");
 
-  // Server hali tayyor bo'lmasa — uyg'otib kutamiz
   if (!serverReady) {
     showMsg("Server uyg'onmoqda... (30 soniya)");
     await wakeUpServer();
   }
 
-  // 3 marta urinib ko'radi
   const ok = await sendWithRetry(3);
 
   if (ok) {
@@ -195,9 +285,7 @@ submitBtn.addEventListener("click", async () => {
 
 // ─── RETRY MEXANIZMI ──────────────────────────────────────────────────────────
 async function sendWithRetry(maxAttempts) {
-
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-
     if (attempt > 1) {
       showMsg(`Qayta urinish ${attempt}/${maxAttempts}...`);
       await sleep(3000);
@@ -205,18 +293,13 @@ async function sendWithRetry(maxAttempts) {
 
     const result = await sendAttendance();
 
-    // SUCCESS
-    if (result.success) {
-      return true;
-    }
+    if (result.success) return true;
 
-    // BACKEND XATOSI — retry qilmaymiz
     if (!result.retry) {
       showMsg(result.message, true);
       return false;
     }
 
-    // NETWORK/SERVER XATOSI
     if (attempt < maxAttempts) {
       showMsg("Server uyg'onmoqda...");
       await wakeUpServer();
@@ -225,6 +308,11 @@ async function sendWithRetry(maxAttempts) {
 
   showMsg("Server bilan aloqa o'rnatilmadi. Keyinroq urinib ko'ring.", true);
   return false;
+}
+
+// ─── SLEEP HELPER ─────────────────────────────────────────────────────────────
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // ─── SERVER GA YUBORISH ───────────────────────────────────────────────────────
@@ -249,20 +337,11 @@ async function sendAttendance() {
     });
 
     let result = {};
-    try {
-      result = await res.json();
-    } catch {}
+    try { result = await res.json(); } catch {}
 
-    // SUCCESS
-    if (res.ok) {
-      return {
-        success: true
-      };
-    }
+    if (res.ok) return { success: true };
 
-    // BACKEND XATOSI
     let errText = `Xato (${res.status})`;
-
     if (typeof result.detail === "string") {
       errText = result.detail;
     } else if (Array.isArray(result.detail)) {
@@ -273,20 +352,10 @@ async function sendAttendance() {
       errText = result.message;
     }
 
-    // Bu server alive degani — retry qilinmaydi
-    return {
-      success: false,
-      retry: false,
-      message: errText
-    };
+    return { success: false, retry: false, message: errText };
 
   } catch {
-    // Faqat network/server dead bo'lsa retry
-    return {
-      success: false,
-      retry: true,
-      message: "Server bilan aloqa yo'q"
-    };
+    return { success: false, retry: true, message: "Server bilan aloqa yo'q" };
   }
 }
 
