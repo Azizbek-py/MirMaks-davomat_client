@@ -69,134 +69,195 @@ tabs.forEach(tab => {
   });
 });
 
-// ─── LOCATION ─────────────────────────────────────────────────────────────────
-// FIX: Android uchun timeout oshirildi, maximumAge qo'shildi,
-//      va watchPosition ishlatildi — bir marta so'rab bekor qilmaydi
-let geoWatchId = null;
+// ─── GPS ──────────────────────────────────────────────────────────────────────
+// Android WebView'da GPS ishonchli ishlashi uchun:
+// 1. watchPosition — bir marta emas, doimiy kuzatadi
+// 2. enableHighAccuracy: false — avval tez (network) lokatsiya oladi
+// 3. Ikki bosqichli: avval tez, keyin aniq
 
-function getLocation() {
+let gpsReady = false;
+let watchId  = null;
+
+function startGPS() {
   if (!navigator.geolocation) {
-    locationEl.textContent = "Qo'llab-quvvatlanmaydi";
+    locationEl.textContent = "GPS yo'q";
     return;
   }
 
-  locationEl.textContent = "Aniqlanmoqda...";
+  locationEl.textContent = "GPS aniqlanmoqda...";
 
-  // Avval tez (past aniqlikda) olishga harakat qilamiz
+  // 1-bosqich: network orqali tez olish (Android'da 1-2 soniyada ishlaydi)
   navigator.geolocation.getCurrentPosition(
-    pos => {
-      latitude  = pos.coords.latitude;
-      longitude = pos.coords.longitude;
-      accuracy  = Math.round(pos.coords.accuracy || 0);
-      locationEl.textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)} (±${accuracy}m)`;
-    },
-    () => {
-      // Agar tez muvaffaqiyatsiz bo'lsa — past aniqlikda qayta urinib ko'ramiz
-      navigator.geolocation.getCurrentPosition(
-        pos => {
-          latitude  = pos.coords.latitude;
-          longitude = pos.coords.longitude;
-          accuracy  = Math.round(pos.coords.accuracy || 0);
-          locationEl.textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)} (±${accuracy}m)`;
-        },
-        err => {
-          // Android'da ba'zan ruxsat so'rovi kechikadi — xato turini ko'rsatamiz
-          if (err.code === 1) {
-            locationEl.textContent = "GPS ruxsati berilmagan";
-          } else if (err.code === 2) {
-            locationEl.textContent = "GPS signal yo'q";
-          } else {
-            locationEl.textContent = "GPS vaqt tugadi";
-          }
-        },
-        {
-          enableHighAccuracy: false,   // FIX: false — Android'da tezroq ishlaydi
-          timeout: 30000,              // FIX: 30 soniya (10dan ko'p)
-          maximumAge: 60000            // FIX: 1 daqiqa oldingi koordinatani qabul qiladi
-        }
-      );
-    },
-    {
-      enableHighAccuracy: true,
-      timeout: 15000,                  // FIX: 15 soniya
-      maximumAge: 10000                // FIX: 10 soniyalik kesh
-    }
+    pos => onGPSSuccess(pos, "tez"),
+    err => onGPSError(err, "tez"),
+    { enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 }
+  );
+
+  // 2-bosqich: GPS orqali aniq olish (parallel ishga tushadi)
+  watchId = navigator.geolocation.watchPosition(
+    pos => onGPSSuccess(pos, "aniq"),
+    err => onGPSError(err, "aniq"),
+    { enableHighAccuracy: true, timeout: 30000, maximumAge: 5000 }
   );
 }
 
-getLocation();
+function onGPSSuccess(pos, source) {
+  latitude  = pos.coords.latitude;
+  longitude = pos.coords.longitude;
+  accuracy  = Math.round(pos.coords.accuracy || 0);
+  gpsReady  = true;
+  locationEl.textContent = `${latitude.toFixed(4)}, ${longitude.toFixed(4)} ±${accuracy}m`;
+
+  // Aniq GPS olindi — watchni to'xtatamiz
+  if (source === "aniq" && watchId !== null) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+  }
+}
+
+function onGPSError(err, source) {
+  // Tez rejim xato berganda aniq rejim hali ishlaydi — xabar chiqarmaymiz
+  if (source === "tez") return;
+
+  const msgs = {
+    1: "GPS ruxsati yo'q — telefon sozlamalaridan ruxsat bering",
+    2: "GPS signal topilmadi — ochiq joyga chiqing",
+    3: "GPS vaqt tugadi — qayta urinmoqda..."
+  };
+  locationEl.textContent = msgs[err.code] || "GPS xato";
+
+  // Timeout bo'lsa qayta urinib ko'ramiz
+  if (err.code === 3) {
+    setTimeout(startGPS, 3000);
+  }
+}
+
+startGPS();
 
 // ─── SERVER UYG'OTISH ─────────────────────────────────────────────────────────
 async function wakeUpServer() {
   try {
     const res = await fetch(`${SERVER}/`, { method: "GET" });
-    if (res.ok) {
-      serverReady = true;
-      console.log("[SERVER] Tayyor ✓");
-    }
+    if (res.ok) { serverReady = true; }
   } catch {
-    console.warn("[SERVER] Uyg'otib bo'lmadi, keyinroq urinamiz");
+    // keyinroq qayta uriniladi
   }
 }
 wakeUpServer();
 
 // ─── CAMERA ───────────────────────────────────────────────────────────────────
-// FIX: Android'da kamera qorashi uchun to'liq qayta yozildi
+// Android Telegram WebView'da kamera qorong'u bo'lishining sabablari:
+// 1. getUserMedia qaytgunga qadar video.play() chaqirilmaydi
+// 2. srcObject o'rnatilgach loadedmetadata kutilmaydi
+// 3. Constraints juda qattiq bo'lsa oqim tashlanadi
+// 4. WebView kamera ruxsatini alohida so'raydi
+
 async function startCamera() {
-  stopCamera(); // oldingi stream'ni tozalash
+  stopCamera();
 
-  // FIX: video elementiga kerakli atributlarni JS orqali ham o'rnatamiz
+  // Video atributlarini JS orqali ham o'rnatamiz (HTML'ga qo'shimcha)
   video.setAttribute("autoplay", "");
-  video.setAttribute("playsinline", "");   // iOS + Android WebView uchun MUHIM
+  video.setAttribute("playsinline", "");
   video.setAttribute("muted", "");
-  video.muted = true;
+  video.muted      = true;
+  video.playsInline = true;
 
-  // FIX: Android'da ideal constraints ishlatamiz — qattiq qiymat emas
-  const constraints = {
-    audio: false,
-    video: {
-      facingMode: { ideal: "user" },       // FIX: exact emas, ideal
-      width:  { ideal: 640, max: 1280 },   // FIX: aniq o'lcham — qorashni oldini oladi
-      height: { ideal: 480, max: 960 },
-    }
-  };
+  // Android uchun constraints — qattiq emas, ideal
+  const constraintsList = [
+    // 1-urinish: old kamera, ideal o'lcham
+    {
+      video: {
+        facingMode: { ideal: "user" },
+        width:  { ideal: 640 },
+        height: { ideal: 480 }
+      },
+      audio: false
+    },
+    // 2-urinish: facingMode'siz
+    {
+      video: {
+        width:  { ideal: 640 },
+        height: { ideal: 480 }
+      },
+      audio: false
+    },
+    // 3-urinish: eng oddiy
+    { video: true, audio: false }
+  ];
 
-  try {
-    camStream = await navigator.mediaDevices.getUserMedia(constraints);
-    video.srcObject = camStream;
-
-    // FIX: Android'da play() promiseni kutish kerak
+  for (let i = 0; i < constraintsList.length; i++) {
     try {
-      await video.play();
-    } catch (playErr) {
-      // Ba'zi Android brauzerlarida play() avtomatik chaqiriladi — xato normal
-      console.warn("[CAM] play() xatosi (normal):", playErr.message);
-    }
+      const stream = await navigator.mediaDevices.getUserMedia(constraintsList[i]);
+      camStream      = stream;
+      video.srcObject = stream;
 
-    // FIX: loadedmetadata kutish — video o'lchamlari tayyor bo'lguncha
-    await new Promise((resolve) => {
-      if (video.readyState >= 2) {
-        resolve();
-      } else {
-        video.addEventListener("loadedmetadata", resolve, { once: true });
-        // Xavfsizlik uchun timeout
-        setTimeout(resolve, 3000);
+      // Android'da MUHIM: srcObject o'rnatilgach play() chaqirilishi kerak
+      // va loadedmetadata hodisasini kutish shart
+      await waitForVideoReady();
+
+      console.log(`[CAM] Ishladi (${i + 1}-urinish): ${video.videoWidth}x${video.videoHeight}`);
+      showMsg(""); // xato xabarni tozalash
+      return; // muvaffaqiyatli — chiqamiz
+
+    } catch (err) {
+      console.warn(`[CAM] ${i + 1}-urinish xato: ${err.name} — ${err.message}`);
+      stopCamera();
+
+      if (err.name === "NotAllowedError") {
+        showMsg("Kamera ruxsati berilmagan — telefon sozlamalaridan ruxsat bering", true);
+        return; // ruxsat yo'q — qayta urinishning foydasi yo'q
       }
-    });
-
-    console.log(`[CAM] ${video.videoWidth}x${video.videoHeight} — tayyor`);
-
-  } catch (err) {
-    // FIX: Constraints ishlamasa — eng oddiy rejimda qayta urinib ko'ramiz
-    console.warn("[CAM] Constraints bilan ishlamadi, oddiy rejim:", err.message);
-    try {
-      camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      video.srcObject = camStream;
-      await video.play().catch(() => {});
-    } catch (fallbackErr) {
-      showMsg("Kamera: " + fallbackErr.message, true);
+      // Boshqa xatolarda keyingi constraints bilan davom etamiz
     }
   }
+
+  showMsg("Kamera ishlamadi — brauzer kamerani qo'llab-quvvatlamayapti", true);
+}
+
+// Android'da video tayyor bo'lguncha kutish
+function waitForVideoReady() {
+  return new Promise((resolve) => {
+    // play() ni chaqiramiz
+    const playPromise = video.play();
+    if (playPromise) {
+      playPromise.catch(() => {}); // xatoni e'tiborsiz qoldiramiz
+    }
+
+    // Allaqachon tayyor bo'lsa — darhol
+    if (video.readyState >= 3 && video.videoWidth > 0) {
+      resolve();
+      return;
+    }
+
+    let resolved = false;
+
+    const done = () => {
+      if (!resolved) {
+        resolved = true;
+        resolve();
+      }
+    };
+
+    // loadeddata — metadata + birinchi frame tayyor
+    video.addEventListener("loadeddata", done, { once: true });
+
+    // canplay — oqim o'ynashga tayyor
+    video.addEventListener("canplay", done, { once: true });
+
+    // videoWidth pollingsi — ba'zi Android'da hodisalar otib ketadi
+    const poll = setInterval(() => {
+      if (video.videoWidth > 0) {
+        clearInterval(poll);
+        done();
+      }
+    }, 100);
+
+    // 5 soniyada majburiy hal — kutishni tugatamiz
+    setTimeout(() => {
+      clearInterval(poll);
+      done();
+    }, 5000);
+  });
 }
 
 function stopCamera() {
@@ -211,12 +272,21 @@ startCamera();
 
 // ─── CAPTURE ──────────────────────────────────────────────────────────────────
 captureBtn.addEventListener("click", () => {
-  // FIX: videoWidth 0 bo'lsa — kamera hali tayyor emas
   const vw = video.videoWidth;
   const vh = video.videoHeight;
 
-  if (!camStream || !vw || !vh) {
-    showMsg("Kamera hali tayyor emas, kuting...", true);
+  if (!camStream) {
+    showMsg("Kamera ulanmagan", true);
+    return;
+  }
+
+  if (!vw || !vh) {
+    // Video hali tayyor emas — kutib qayta urinib ko'ramiz
+    showMsg("Kamera yuklanmoqda, bir soniya...", true);
+    waitForVideoReady().then(() => {
+      if (video.videoWidth > 0) captureBtn.click();
+      else showMsg("Kamera tayyor emas, qayta bosing", true);
+    });
     return;
   }
 
@@ -225,12 +295,12 @@ captureBtn.addEventListener("click", () => {
   canvas.height = vh;
   const ctx = canvas.getContext("2d");
 
-  // Mirror — livecam bilan bir xil ko'rinsin
+  // Mirror
   ctx.translate(vw, 0);
   ctx.scale(-1, 1);
   ctx.drawImage(video, 0, 0, vw, vh);
 
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
   selfieBase64  = dataUrl.split(",")[1];
 
   capturedImg.src           = dataUrl;
@@ -253,8 +323,6 @@ retakeBtn.addEventListener("click", async () => {
   submitBtn.classList.add("hidden");
   captureBtn.classList.remove("hidden");
   clearMsg();
-
-  // FIX: Retake'da kamerani qayta ishga tushiramiz
   await startCamera();
 });
 
@@ -263,12 +331,17 @@ submitBtn.addEventListener("click", async () => {
   if (!selfieBase64) { showMsg("Avval rasm oling!", true); return; }
   if (!telegramId)   { showMsg("Telegram orqali oching!", true); return; }
 
+  if (!gpsReady) {
+    showMsg("GPS hali aniqlanmadi, kuting...", true);
+    return;
+  }
+
   submitBtn.disabled    = true;
   submitBtn.textContent = "Yuborilmoqda...";
   showMsg("Serverga ulanilmoqda...");
 
   if (!serverReady) {
-    showMsg("Server uyg'onmoqda... (30 soniya)");
+    showMsg("Server uyg'onmoqda...");
     await wakeUpServer();
   }
 
@@ -276,6 +349,10 @@ submitBtn.addEventListener("click", async () => {
 
   if (ok) {
     stopCamera();
+    if (watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+    }
     showSuccessPanel();
   } else {
     submitBtn.disabled    = false;
@@ -283,47 +360,33 @@ submitBtn.addEventListener("click", async () => {
   }
 });
 
-// ─── RETRY MEXANIZMI ──────────────────────────────────────────────────────────
+// ─── RETRY ────────────────────────────────────────────────────────────────────
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 async function sendWithRetry(maxAttempts) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (attempt > 1) {
       showMsg(`Qayta urinish ${attempt}/${maxAttempts}...`);
       await sleep(3000);
     }
-
     const result = await sendAttendance();
-
     if (result.success) return true;
-
-    if (!result.retry) {
-      showMsg(result.message, true);
-      return false;
-    }
-
-    if (attempt < maxAttempts) {
-      showMsg("Server uyg'onmoqda...");
-      await wakeUpServer();
-    }
+    if (!result.retry) { showMsg(result.message, true); return false; }
+    if (attempt < maxAttempts) await wakeUpServer();
   }
-
   showMsg("Server bilan aloqa o'rnatilmadi. Keyinroq urinib ko'ring.", true);
   return false;
 }
 
-// ─── SLEEP HELPER ─────────────────────────────────────────────────────────────
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// ─── SERVER GA YUBORISH ───────────────────────────────────────────────────────
+// ─── YUBORISH ─────────────────────────────────────────────────────────────────
 async function sendAttendance() {
   try {
     const payload = {
       telegram_id: telegramId,
       type:        attendanceType,
-      latitude:    latitude,
-      longitude:   longitude,
-      accuracy:    accuracy,
+      latitude,
+      longitude,
+      accuracy,
       selfie_data: selfieBase64,
       init_data:   initData,
       timestamp:   new Date().toISOString(),
@@ -342,18 +405,12 @@ async function sendAttendance() {
     if (res.ok) return { success: true };
 
     let errText = `Xato (${res.status})`;
-    if (typeof result.detail === "string") {
-      errText = result.detail;
-    } else if (Array.isArray(result.detail)) {
-      errText = result.detail
-        .map(d => `"${Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : "?"}: ${d.msg}"`)
-        .join(" | ");
-    } else if (typeof result.message === "string") {
-      errText = result.message;
-    }
+    if (typeof result.detail === "string") errText = result.detail;
+    else if (Array.isArray(result.detail))
+      errText = result.detail.map(d => `${d.loc?.at(-1)}: ${d.msg}`).join(" | ");
+    else if (typeof result.message === "string") errText = result.message;
 
     return { success: false, retry: false, message: errText };
-
   } catch {
     return { success: false, retry: true, message: "Server bilan aloqa yo'q" };
   }
@@ -375,7 +432,6 @@ function showSuccessPanel() {
 
   mainPanel.classList.add("hidden");
   successPanel.classList.remove("hidden");
-
   setTimeout(closeApp, 5000);
 }
 
@@ -396,6 +452,6 @@ function closeApp() {
     selfieBase64              = null;
     clearMsg();
     startCamera();
-    getLocation();
+    startGPS();
   }
 }
